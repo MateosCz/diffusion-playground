@@ -3,6 +3,24 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
+"""
+data processing helpers
+"""
+
+def so2mat_to_pos(so2matrix):
+    """
+    recover fractional coordinates from so2 matrix
+    """
+    theta = 
+
+def so2mat_to_angle(so2matrix):
+    """
+    recover theta 
+    """
+
+
+
+
 
 """
 data generation
@@ -101,10 +119,34 @@ class Checkerboard_Dataset(Dataset):
 
 
 """
-checkerboard groundtruth plot
+Lie torus dataset wrapper
+
 """
 
-        
+class TorusLieWrapper(Dataset):
+    """
+    Wraps any dataset that returns (num_points, 2) tensors in [0, 1)
+    and converts them to SO(2) x SO(2) rotation matrices.
+    
+    Output shape: (num_points, 2, 2, 2) — num_points pairs of 2x2 rotation matrices.    
+    """
+
+    def __init__(self, base_dataset):
+        self.base = base_dataset
+    
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        points = self.base[idx]                          # (num_points, 2) in [0, 1)
+        angles = (points - 0.5) * 2 * torch.pi          # (num_points, 2) in [-pi, pi)
+        c, s = torch.cos(angles), torch.sin(angles)
+        row0 = torch.stack([c, s], dim=-1)               # (num_points, 2, 2 (row1))
+        row1 = torch.stack([-s, c], dim=-1)
+        matrices = torch.stack([row0, row1], dim=-2)     # (num_points, 2(theta1,theta2, corresponding to x,y), 2(row1), 2(row2))
+        return matrices
+
+
 
 
 """
