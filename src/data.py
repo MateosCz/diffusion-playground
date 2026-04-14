@@ -11,12 +11,38 @@ def so2mat_to_pos(so2matrix):
     """
     recover fractional coordinates from so2 matrix
     """
-    theta = 
+    theta = torch.sign(so2matrix[...,0,1]) * torch.arccos(so2matrix[...,0,0])
+    x = (theta/(2 * torch.pi)+ 0.5) * (1-0)
+    return x
 
 def so2mat_to_angle(so2matrix):
     """
-    recover theta 
+    recover theta(angle) from so2 matrix 
     """
+    theta = torch.sign(so2matrix[...,0,1]) * torch.arccos(so2matrix[...,0,0])
+    return theta
+
+def angle_to_pos(theta, a=0, b=1):
+    """Map theta to x \in [a,b)"""
+    x = (theta/ (2*torch.pi)+0.5) * (b-a)
+    return x
+
+def pos_to_angle(x, a=0,b=1):
+    """
+    Map x from [a,b) to theta [-pi,pi)
+    """
+    theta = 2 * torch.pi * (x - a) / (b - a) - torch.pi
+    return theta
+
+def theta_to_so2mat(theta):
+    """Construct SO(2) representation g from θ."""
+    cos_t = torch.cos(theta)
+    sin_t = torch.sin(theta)
+    g = torch.stack([
+        torch.stack([cos_t, sin_t], dim=-1),
+        torch.stack([-sin_t, cos_t], dim=-1),
+    ], dim=-2)
+    return g
 
 
 
