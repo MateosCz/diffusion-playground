@@ -5,7 +5,8 @@ diffusion models
 from torch import nn
 import torch
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, Literal, Sequence
+from src.sde import BaseSDE, BaseSDEIntegrator
 
 
 """
@@ -43,5 +44,21 @@ class BaseDiffusion(ABC, nn.Module):
     @torch.inference_mode()
     def sample_prior(self, index: torch.Tensor):
         raise NotImplementedError
+
+    
+"""
+TDM (Trivialized Diffusion Model) used for doing diffusions on fractional coordinate data.
+Input data should already be wrapped to LieTorus data (data in SO2^n).
+Constructor accepts 2 parameters: the backbone sde and the dimension of input data.
+"""
+
+class TDMDiffusion(BaseDiffusion):
+    def __init__(self, sde: BaseSDE, dim: Sequence[int] | int, integrator: BaseSDEIntegrator):
+        self.sde = sde
+        self.dim = dim
+        self.integrator = integrator
+
+
+
 
 

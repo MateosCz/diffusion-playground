@@ -43,6 +43,14 @@ def theta_to_so2mat(theta):
     ], dim=-2)
     return g
 
+def torus_embedding(theta1: torch.Tensor, theta2: torch.Tensor, R:float = 3.0, r: float = 1.0):
+    """construct the torus embedding for SO(2)xSO(2) data"""
+    x = (R + r * torch.cos(theta2)) * torch.cos(theta1)
+    y = (R + r * torch.cos(theta2)) * torch.sin(theta1)
+    z = r * torch.sin(theta2)
+
+
+
 
 
 
