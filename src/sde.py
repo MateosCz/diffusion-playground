@@ -49,13 +49,42 @@ class BaseSDE(ABC, nn.Module):
     def drift(self, x: torch.Tensor, t: torch.Tensor):
         raise NotImplementedError
     
+
+    """
+    transition kernel parameters
+    """
+    @abstractmethod
+    def mean_t_coeff(self, t:torch.Tensor):
+        raise NotImplementedError
+    
+    @abstractmethod
+    def sigma_t(self, t:torch.Tensor):
+        raise NotImplementedError
+
+    
+    """
+    function for computing the time-reversed sde's drift, given time reversed zt, t, score, eta 
+    """
     def reverse_drift(
         self, 
         zt: torch.Tensor, 
         t: torch.Tensor, 
         score: torch.Tensor,
         eta: Optional[torch.Tensor | float] = None):
-        raise NotImplementedError
+        f = self.drift(zt,t)
+        g = self.diffusion(zt,t)
+        """
+        when eta is 0, then the reverse diffusion sample the probability flow ODE:
+        dx = (f(x,t) - 1/2 g(x,t) * g(x,t)^T * score) dt
+        rather than from SDE:
+        dx = (f(x,t) - g(x,t) * g(x,t)^T * score) dt + g(x,t) dW
+        
+        """
+        if eta is None: 
+            eta = g
+        reverse_drift = f - 0.5 * (g**2 + eta **2) * score
+
+    
 
 class VPSDE(BaseSDE):
     """
@@ -63,6 +92,9 @@ class VPSDE(BaseSDE):
     dx = f(x, t) dt + g(t) dW
     where f(x, t) = -0.5 * beta(t) * x
     and g(t) = sqrt(beta(t))
+    transition kernel pt|0 = N(x_t| alpha_t * x_0, sigma_t**2 * I)
+    alpha_t is mean_t_coeff
+    sigma_t is sigma_t
     """
     def __init__(self, schedule: Schedule):
         super().__init__()
@@ -75,6 +107,22 @@ class VPSDE(BaseSDE):
     def diffusion(self, t: torch.Tensor):
         beta = self.schedule.beta(t)
         return torch.sqrt(beta)
+
+    
+    """
+    transition kernel parameters, mean_t_coeff(alpha_t) and sigma_t(sigma_t)
+    """
+    
+    def mean_t_coeff(self, t: torch.Tensor):
+        beta_integral = self.schedule.integral_beta(t)
+        mean_t_coeff = torch.exp(-0.5 * beta_integral)
+        return mean_t_coeff
+
+    def sigma_t(self, t:torch.Tensor):
+        beta_integral = self.schedule.integral_beta(t)
+        sigma_t = torch.sqrt(1-torch.exp(beta_integral))
+        
+        
             
 
     
