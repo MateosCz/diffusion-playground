@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Literal, Optional, Callable
+from numpy import int16
 import torch.nn as nn
 import torch
 
@@ -129,22 +130,91 @@ class VPSDE(BaseSDE):
 
 
 
-class BaseIntegrator(ABC, nn.Module):
+class BaseSDEIntegrator(ABC, nn.Module):
     def __init__(self, sde: BaseSDE):
         super().__init__()
         self.sde = sde
-
+    
+    """
+    integrate method in BaseSDEIntegrator class, must accept start data x0, 
+    start time t0, end time T, number of time steps n_steps, score function score_fn
+    Used to sample from back to begining, during inference step
+    """
     @abstractmethod
-    def integrate(self, x, t):
+    def integrate(
+        self, 
+        x0: torch.Tensor, 
+        t0: torch.Tensor, 
+        T: torch.Tensor, 
+        n_steps: int, 
+        direction: Literal["forward", "backward"],
+        score_fn: Optional[Callable[[torch.Tensor,torch.Tensor],torch.Tensor]] = None,
+        **kwargs):
         raise NotImplementedError
 
-class BaseSampler(ABC, nn.Module):
-    def __init__(self, sde: BaseSDE, integrator: BaseIntegrator):
+class EulerIntegrator(BaseSDEIntegrator):
+    def __init__(self, sde: BaseSDE):
         super().__init__()
         self.sde = sde
-        self.integrator = integrator
+        """
+        Simplest integrator for SDEs, integrate along time t, compute marginal p_xt.
+        Both accept forward sde integral and backward integral, depends on whether score_fn is given.
+        """
 
-    @abstractmethod
-    def sample(self, x, t):
-        raise NotImplementedError
+    def integrate(
+        self, 
+        x0: torch.Tensor, 
+        t0: torch.Tensor, 
+        T: torch.Tensor, 
+        n_steps: int, 
+        direction: Literal["forward", "backward"],
+        score_fn: Optional[Callable[[torch.Tensor,torch.Tensor],torch.Tensor]] = None, 
+        **kwargs):
+        if direction is "forward":
+            integral_xt = self._integrate_forward(x0,t0,T,n_steps)
+        else:
+            integral_xt = self._integrate_backward(x0,t0,T,n_steps,score_fn)
+        return integral_xt
+            
 
+
+
+        
+    def _integrate_forward(        
+        self, 
+        x0: torch.Tensor, 
+        t0: torch.Tensor, 
+        T: torch.Tensor, 
+        n_steps: int, 
+        **kwargs):
+        dt = (T - t0)/ n_steps
+        xt = x0.clone()
+        t = t0.clone()
+        for _ in range(n_steps):
+            dW = torch.sqrt(dt)*torch.randn_like(x0)
+            xt = xt + self.sde.drift(xt, t) * dt + self.sde.diffusion(xt,t) * dW
+            t = t + dt
+        
+        return xt
+
+
+
+
+
+    def _integrate_backward(
+        self, 
+        x0: torch.Tensor, 
+        t0: torch.Tensor, 
+        T: torch.Tensor, 
+        n_steps: int, 
+        score_fn: Callable[[torch.Tensor,torch.Tensor],torch.Tensor], 
+        **kwargs):
+        dt = (t0 - T)/ n_steps
+        zt = x0.clone()
+        t = t0.clone()
+        for _ in range(n_steps):
+            dW = torch.sqrt(dt)*torch.randn_like(x0)
+            score = score_fn(zt,t)
+            zt = zt + self.sde.reverse_drift(zt, t, score) * (-dt) + self.sde.diffusion(zt,t)*dW
+            t = t-dt
+        return zt
