@@ -6,7 +6,7 @@ from torch import nn
 import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence
-from src.sde import BaseSDE, BaseSDEIntegrator
+from src.sde import BaseSDE, BaseSDEIntegrator, EulerIntegrator
 
 
 """
@@ -49,14 +49,33 @@ class BaseDiffusion(ABC, nn.Module):
 """
 TDM (Trivialized Diffusion Model) used for doing diffusions on fractional coordinate data.
 Input data should already be wrapped to LieTorus data (data in SO2^n).
-Constructor accepts 2 parameters: the backbone sde and the dimension of input data.
+Constructor accepts 3 parameters: the backbone sde and the dimension of input data.
 """
 
 class TDMDiffusion(BaseDiffusion):
-    def __init__(self, sde: BaseSDE, dim: Sequence[int] | int, integrator: BaseSDEIntegrator):
+    def __init__(self, sde: BaseSDE, dim: Sequence[int] | int, integrator_type: Literal["Exp, Euler"]):
         self.sde = sde
         self.dim = dim
-        self.integrator = integrator
+        self.integrator = self._get_integrator_by_name(integrator_type, sde)
+
+
+    def _get_integrator_by_name(self, integrator_type, sde):
+        if integrator_type is "Euler":
+            integrator = EulerIntegrator(sde)
+        return integrator
+    
+    def sample_forward(self):
+
+    def sample_forward_sim(self):
+
+    def forward_kernel(self):
+
+    def sample_backward(self):
+    
+
+
+
+
 
 
 

@@ -84,6 +84,7 @@ class BaseSDE(ABC, nn.Module):
         if eta is None: 
             eta = g
         reverse_drift = f - 0.5 * (g**2 + eta **2) * score
+        return reverse_drift
 
     
 
