@@ -26,6 +26,6 @@ class WrappedNormalDistribution(BaseDistribution):
         self.sigma = sigma
         self.trunc_n = trunc_n
 
-    def sample(self):
+    # def sample(self):
 
 

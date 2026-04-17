@@ -122,7 +122,8 @@ class VPSDE(BaseSDE):
 
     def sigma_t(self, t:torch.Tensor):
         beta_integral = self.schedule.integral_beta(t)
-        sigma_t = torch.sqrt(1-torch.exp(beta_integral))
+        sigma_t = torch.sqrt(1-torch.exp(-beta_integral))
+        return sigma_t
         
         
             
