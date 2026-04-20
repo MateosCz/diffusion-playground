@@ -49,6 +49,13 @@ def torus_embedding(theta1: torch.Tensor, theta2: torch.Tensor, R:float = 3.0, r
     y = (R + r * torch.cos(theta2)) * torch.sin(theta1)
     z = r * torch.sin(theta2)
 
+def wrap_fractional(x, x_range= (2.0*torch.pi)):
+    wrapped_x = torch.arctan2(torch.sin(x_range * x), torch.cos(x_range * x)) / x_range
+    return wrapped_x
+
+def wrap_angle(x):
+    wrapped_x = torch.arctan2(torch.sin(x), torch.cos(x))
+    return wrapped_x
 
 
 
