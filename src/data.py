@@ -48,6 +48,7 @@ def torus_embedding(theta1: torch.Tensor, theta2: torch.Tensor, R:float = 3.0, r
     x = (R + r * torch.cos(theta2)) * torch.cos(theta1)
     y = (R + r * torch.cos(theta2)) * torch.sin(theta1)
     z = r * torch.sin(theta2)
+    return torch.stack([x,y,z], dim=-1)
 
 """
 Wrap periodic fractional-coordinate-like data from R to [-pi,pi]
@@ -191,7 +192,23 @@ class TorusLieWrapper(Dataset):
         return matrices
 
 
+class AngleTorusWrapper(Dataset):
+    """
+    Wraps any dataset that returns rotation matrices in SO(2)
+    and converts them to angle torus data in [-pi, pi)
+    
+    Output shape: (num_points, dim) — num_points pairs of dim angles in [-pi, pi).    
+    """
+    def __init__(self, base_dataset):
+        self.base = base_dataset
 
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        matrices = self.base[idx]                          # (num_points, dim, 2, 2)
+        angles = torch.atan2(matrices[...,1,0], matrices[...,0,0])
+        return angles # (num_points, dim)
 
 """
 Pac-man data generation

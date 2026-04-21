@@ -156,8 +156,8 @@ class BaseSDEIntegrator(ABC, nn.Module):
 
 class EulerIntegrator(BaseSDEIntegrator):
     def __init__(self, sde: BaseSDE):
-        super().__init__()
-        self.sde = sde
+        super().__init__(sde)
+        # self.sde = sde
         """
         Simplest integrator for SDEs, integrate along time t, compute marginal p_xt.
         Both accept forward sde integral and backward integral, depends on whether score_fn is given.

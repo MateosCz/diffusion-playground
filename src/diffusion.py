@@ -94,9 +94,10 @@ class TDMDiffusion(BaseDiffusion):
         self,
         f0: torch.Tensor, # input Lie group data in angle form, with shape (batch_size, n_points, dim) each point in [-pi, pi)^dim
         total_time: float, 
-        t_dist_kw: Literal["uniform", "linear"]="uniform", 
+        t_dist_kw: Literal["uniform", "linear", "constant"]="uniform", 
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
-        n_steps: int = 100 # number of time steps if t_dist_kw is "linear"
+        n_steps: int = 100, # number of time steps if t_dist_kw is "linear"
+        constant_t: float = 1.0 # constant time if t_dist_kw is "constant"
         ):
         batch_size = f0.shape[0]
         n_points = f0.shape[1]
@@ -104,13 +105,13 @@ class TDMDiffusion(BaseDiffusion):
 
         # sample time uniformly
         if t_dist_kw == "uniform":
-            ts = torch.rand(size=f0.shape[:-1]) * total_time # shape (batch_size, n_points)
+            ts = torch.rand(size=(batch_size,)) * total_time # shape (batch_size)
+            ts = ts.view(batch_size,1 ,1).expand(batch_size, n_points, dim) # shape (batch_size, n_points, dim)
         elif t_dist_kw == "linear":
             ts = torch.linspace(0, total_time, n_steps) # shape (n_steps)
             ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1) # shape (batch_size, n_steps)
-        ts = torch.unsqueeze(ts,dim=-1) # shape (batch_size, n_steps, 1)
-        # repeat ts to shape (batch_size, n_steps, dim)
-        ts = ts.repeat(1,1,dim)
+        elif t_dist_kw == "constant":
+            ts = constant_t * torch.ones(size=(batch_size, n_points, dim))
         if v0_dist_kw == "zero":
             v0s = torch.zeros(size=f0.shape) # shape (batch_size, n_points, dim)
         else:
