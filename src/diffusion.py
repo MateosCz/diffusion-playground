@@ -7,7 +7,8 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
-from src.data import pos_to_angle
+from src.data import pos_to_angle, wrap
+from src.distribution import WrappedNormalDistribution
 
 
 """
@@ -58,13 +59,22 @@ the sde VPSDE(LinearSchedule(beta_min=2, beta_max=2)).
 """
 
 class TDMDiffusion(BaseDiffusion):
-    def __init__(self, dim: Sequence[int] | int, integrator_type: Literal["Exp, Euler"], sde: Optional[BaseSDE | None] = None):
-        
+    def __init__(
+        self, 
+        dim: Sequence[int] | int, 
+        integrator_type: Literal["Exp", "Euler"], 
+        sde: Optional[BaseSDE | None] = None, 
+        trunc_n: int = 10,
+        f_scale: float = 2 * torch.pi
+        ):
+        super().__init__()
         if sde is None:
             self.sde = VPSDE(LinearSchedule(beta_min=2,beta_max=2))
         self.sde = sde
         self.dim = dim
         self.integrator = self._get_integrator_by_name(integrator_type, sde)
+        self.trunc_n = trunc_n
+        self.f_scale = f_scale
 
 
     def _get_integrator_by_name(self, integrator_type, sde):
@@ -83,8 +93,9 @@ class TDMDiffusion(BaseDiffusion):
         self,
         f0: torch.Tensor, # input Lie group data, with shape (batch_size, n_points, dim, 2 ,2) each point in SO(2)^dims
         total_time: float, 
-        t_dist_kw: Literal["uniform"]="uniform", 
-        v0_dist_kw: Literal["stdGauss", "zero"] = "zero" # usually initialized with v0 = 0
+        t_dist_kw: Literal["uniform", "linear"]="uniform", 
+        v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
+        n_steps: int = 100 # number of time steps if t_dist_kw is "linear"
         ):
         batch_size = f0.shape[0]
         n_points = f0.shape[1]
@@ -93,13 +104,16 @@ class TDMDiffusion(BaseDiffusion):
         # sample time uniformly
         if t_dist_kw is "uniform":
             ts = torch.rand(size=f0.shape[:2]) * total_time
+        elif t_dist_kw is "linear":
+            ts = torch.linspace(0, total_time, n_steps)
+            ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1)
         ts = torch.unsqueeze(ts,dim=-1)
         if v0_dist_kw is "zero":
             v0s = torch.zeros(size=f0.shape[:3])
         else:
             v0s = torch.randn(size=f0.shape[:3])
         # calculate mu and sigma for sampling vt
-        mu_vt = self.sde.mean_t_coeff(ts)
+        mu_vt = self.sde.mean_t_coeff(ts) * v0s
         sigma_vt = self.sde.sigma_t(ts)
 
         # sampling vt
@@ -112,23 +126,42 @@ class TDMDiffusion(BaseDiffusion):
         else:
             scorev = -epsv/sigma_vt
 
-        #sample r given v
-        rt = 
+        #sample wrapped scalar rt given vt,v0,t
+        wrapped_rts = self._sample_r_given_v(vts, v0s, ts)
+
+        # fractional coordinate ft = f0expm(rt), 
+        # Eq(15) shows f0expm(rt) = wrap(f0+rt)
+        fts = wrap(f0 + wrapped_rts)
+        scorec = self._score_c(vts, v0s, ts)
+
+        score = scorec + scorev
+        latents = (vts, fts)
+        # latents = (vts/ self.f_scale, fts/ self.f_scale) # (normalized vt, normalized ft)
+        return latents, score
+
+
 
     """
     Sampling rt given vt,v0
+    sample from wrapped normal distribution WN(r_t| rt_mu, rt_sigma)
+    In paper rt is skew symmetric matrix, Rt = [[0, r_t], [-r_t, 0]]
+    but we only sample the anti-diagonal scalar r_t
+
     """
     def _sample_r_given_v(self, vt, v0,t):
-        mu_rt = ((1-torch.exp(-t))/(1+torch.exp(t))) * (vt+v0)
-        sigma_rt = 2*t + 8/(torch.exp(t)-1) -4
+        mu_rt = self._mu_rt(vt, v0, t)
+        sigma_rt = self._sigma_rt(t)
         epsrt = torch.randn(size=vt.shape)
         rt_raw = sigma_rt * epsrt + mu_rt
-        wrapped_rt = pos_to_angle(rt_raw, torch.min(rt_raw), torch.max(rt_raw))
+        wrapped_rt = wrap(rt_raw) 
+        return wrapped_rt
 
+    def _mu_rt(self, vt, v0, t):
+        return ((1-torch.exp(-t))/(1+torch.exp(t))) * (vt+v0)
 
-
-
-
+    def _sigma_rt(self, t):
+        return torch.sqrt(2*t + 8/(torch.exp(t)+1) -4)
+        
     def _sample_vt_given_v0(self,v0,t):
         mu_vt = self.sde.mean_t_coeff(t)
         sigma_vt = self.sde.sigma_t(t)
@@ -138,29 +171,20 @@ class TDMDiffusion(BaseDiffusion):
         vt = epsv*sigma_vt + mu_vt
         return vt
 
-        
-            
+    def _score_c(self, vt,v0,t):
+        mu_rt = self._mu_rt(vt, v0, t)
+        sigma_rt = wrap(self._sigma_rt(t))
+        rt = self._sample_r_given_v(vt, v0, t)
+        WN_distribution = WrappedNormalDistribution(mu_rt, sigma_rt, self.trunc_n)
+        scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt, self.f_scale)
+        return scorec
 
 
-        
-
-
-
-
-
-
-    def sample_forward_sim(self):
-
-    def forward_kernel(self):
-
-    def sample_backward(self):
-    
-
-
-
-
-
-
-
-
-
+    def sample_backward(
+        self
+    ):
+        raise NotImplementedError
+    def sample_backward_sim(
+        self
+    ):
+        raise NotImplementedError
