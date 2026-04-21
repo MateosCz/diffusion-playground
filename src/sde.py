@@ -177,9 +177,27 @@ class EulerIntegrator(BaseSDEIntegrator):
         else:
             integral_xt = self._integrate_backward(x0,t0,T,n_steps,score_fn)
         return integral_xt
-            
+        
+    def integrate_forward_step(
+        self,
+        x_curr: torch.Tensor,
+        t_curr: torch.Tensor,
+        dt: torch.Tensor,
+        **kwargs):
+        dW = torch.sqrt(dt)*torch.randn_like(x_curr)
+        x_next = x_curr + self.sde.drift(x_curr, t_curr) * dt + self.sde.diffusion(x_curr,t_curr) * dW
+        return x_next
 
-
+    def integrate_backward_step(
+        self,
+        x_curr: torch.Tensor,
+        t_curr: torch.Tensor,
+        score: torch.Tensor,
+        dt: torch.Tensor,
+        **kwargs):
+        dW = torch.sqrt(dt)*torch.randn_like(x_curr)
+        x_next = x_curr + self.sde.reverse_drift(x_curr, t_curr, score) * (-dt) + self.sde.diffusion(x_curr,t_curr) * dW
+        return x_next
 
         
     def _integrate_forward(        
