@@ -182,13 +182,29 @@ class TDMDiffusion(BaseDiffusion):
         WN_distribution = WrappedNormalDistribution(mu_rt, sigma_rt, self.trunc_n)
         scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt)
         return scorec
-    def loss_diffusion(self, pred, target, t):
-        raise NotImplementedError
 
+    # DSM loss function for training the score network
+    def loss_diffusion(self, pred, target, t):
+        assert pred.shape == target.shape
+        #without reweighting
+        loss = torch.nn.functional.mse_loss(pred, target)
+        return loss
+
+    # DSM loss function for training the score network with reweighting
+    def loss_diffusion_reweighting(self, pred, target, t):
+        assert pred.shape == target.shape
+        #with reweighting
+        reweighting_term = self.sde.sigma_t(t)
+        loss = torch.nn.functional.mse_loss(pred * reweighting_term, target * reweighting_term)
+        return loss
+
+        
     def sample_backward(
-        self
+        self,
+
     ):
         raise NotImplementedError
+
     def sample_backward_sim(
         self
     ):
