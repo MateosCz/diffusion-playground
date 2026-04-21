@@ -49,10 +49,14 @@ def torus_embedding(theta1: torch.Tensor, theta2: torch.Tensor, R:float = 3.0, r
     y = (R + r * torch.cos(theta2)) * torch.sin(theta1)
     z = r * torch.sin(theta2)
 
-def wrap_fractional(x, x_range= (2.0*torch.pi)):
+"""
+Wrap periodic fractional-coordinate-like data from R to [-pi,pi]
+"""
+def wrap_pos(x, x_range:float = 1.0):
     wrapped_x = torch.arctan2(torch.sin(x_range * x), torch.cos(x_range * x)) / x_range
     return wrapped_x
 
+"""wrap periodic angle-like data x from [theta,theta+2kpi](or R) to [-pi,pi]""" 
 def wrap_angle(x):
     wrapped_x = torch.arctan2(torch.sin(x), torch.cos(x))
     return wrapped_x
