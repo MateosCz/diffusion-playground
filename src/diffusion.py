@@ -7,7 +7,7 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
-from src.data import pos_to_angle, wrap
+from src.data import pos_to_angle, wrap_angle
 from src.distribution import WrappedNormalDistribution
 
 
@@ -50,7 +50,7 @@ class BaseDiffusion(ABC, nn.Module):
     
 """
 TDM (Trivialized Diffusion Model) used for doing diffusions on fractional coordinate data.
-Input data should already be wrapped to LieTorus data (data in SO2^n).
+Input data should already be wrapped to LieTorus angle data (data in [-pi, pi)^n).
 Constructor accepts 3 parameters: the backbone sde and the dimension of input data.
 The sde in KLDM paper and TDM paper used for v is 
 dx = -gamma*v_t*dt + sqrt(2 * gamma) dw
@@ -70,15 +70,16 @@ class TDMDiffusion(BaseDiffusion):
         super().__init__()
         if sde is None:
             self.sde = VPSDE(LinearSchedule(beta_min=2,beta_max=2))
-        self.sde = sde
+        else:
+            self.sde = sde
         self.dim = dim
-        self.integrator = self._get_integrator_by_name(integrator_type, sde)
+        self.integrator = self._get_integrator_by_name(integrator_type, self.sde)
         self.trunc_n = trunc_n
         self.f_scale = f_scale
 
 
     def _get_integrator_by_name(self, integrator_type, sde):
-        if integrator_type is "Euler":
+        if integrator_type == "Euler":
             integrator = EulerIntegrator(sde)
         return integrator
     
@@ -91,7 +92,7 @@ class TDMDiffusion(BaseDiffusion):
 
     def sample_forward(
         self,
-        f0: torch.Tensor, # input Lie group data, with shape (batch_size, n_points, dim, 2 ,2) each point in SO(2)^dims
+        f0: torch.Tensor, # input Lie group data in angle form, with shape (batch_size, n_points, dim) each point in [-pi, pi)^dim
         total_time: float, 
         t_dist_kw: Literal["uniform", "linear"]="uniform", 
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
@@ -99,19 +100,21 @@ class TDMDiffusion(BaseDiffusion):
         ):
         batch_size = f0.shape[0]
         n_points = f0.shape[1]
-        dim = f0.shape[3]
+        dim = f0.shape[2]
 
         # sample time uniformly
-        if t_dist_kw is "uniform":
-            ts = torch.rand(size=f0.shape[:2]) * total_time
-        elif t_dist_kw is "linear":
-            ts = torch.linspace(0, total_time, n_steps)
-            ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1)
-        ts = torch.unsqueeze(ts,dim=-1)
-        if v0_dist_kw is "zero":
-            v0s = torch.zeros(size=f0.shape[:3])
+        if t_dist_kw == "uniform":
+            ts = torch.rand(size=f0.shape[:-1]) * total_time # shape (batch_size, n_points)
+        elif t_dist_kw == "linear":
+            ts = torch.linspace(0, total_time, n_steps) # shape (n_steps)
+            ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1) # shape (batch_size, n_steps)
+        ts = torch.unsqueeze(ts,dim=-1) # shape (batch_size, n_steps, 1)
+        # repeat ts to shape (batch_size, n_steps, dim)
+        ts = ts.repeat(1,1,dim)
+        if v0_dist_kw == "zero":
+            v0s = torch.zeros(size=f0.shape) # shape (batch_size, n_points, dim)
         else:
-            v0s = torch.randn(size=f0.shape[:3])
+            v0s = torch.randn(size=f0.shape) # shape (batch_size, n_points, dim)
         # calculate mu and sigma for sampling vt
         mu_vt = self.sde.mean_t_coeff(ts) * v0s
         sigma_vt = self.sde.sigma_t(ts)
@@ -121,7 +124,7 @@ class TDMDiffusion(BaseDiffusion):
         vts = epsv*sigma_vt + mu_vt
 
         # obtain score of v
-        if v0_dist_kw is "zero":
+        if v0_dist_kw == "zero":
             scorev = -vts/(sigma_vt**2)
         else:
             scorev = -epsv/sigma_vt
@@ -131,7 +134,7 @@ class TDMDiffusion(BaseDiffusion):
 
         # fractional coordinate ft = f0expm(rt), 
         # Eq(15) shows f0expm(rt) = wrap(f0+rt)
-        fts = wrap(f0 + wrapped_rts)
+        fts = wrap_angle(f0 + wrapped_rts)
         scorec = self._score_c(vts, v0s, ts)
 
         score = scorec + scorev
@@ -153,14 +156,14 @@ class TDMDiffusion(BaseDiffusion):
         sigma_rt = self._sigma_rt(t)
         epsrt = torch.randn(size=vt.shape)
         rt_raw = sigma_rt * epsrt + mu_rt
-        wrapped_rt = wrap(rt_raw) 
+        wrapped_rt = wrap_angle(rt_raw) 
         return wrapped_rt
 
     def _mu_rt(self, vt, v0, t):
-        return ((1-torch.exp(-t))/(1+torch.exp(t))) * (vt+v0)
+        return ((1-torch.exp(-t))/(1+torch.exp(-t))) * (vt+v0)
 
-    def _sigma_rt(self, t):
-        return torch.sqrt(2*t + 8/(torch.exp(t)+1) -4)
+    def _sigma_rt(self, t, eps = 1e-6):
+        return torch.sqrt(2*t + 8/(torch.exp(t)+1) -4 + eps)
         
     def _sample_vt_given_v0(self,v0,t):
         mu_vt = self.sde.mean_t_coeff(t)
@@ -173,12 +176,13 @@ class TDMDiffusion(BaseDiffusion):
 
     def _score_c(self, vt,v0,t):
         mu_rt = self._mu_rt(vt, v0, t)
-        sigma_rt = wrap(self._sigma_rt(t))
+        sigma_rt = wrap_angle(self._sigma_rt(t))
         rt = self._sample_r_given_v(vt, v0, t)
         WN_distribution = WrappedNormalDistribution(mu_rt, sigma_rt, self.trunc_n)
-        scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt, self.f_scale)
+        scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt)
         return scorec
-
+    def loss_diffusion(self, pred, target, t):
+        raise NotImplementedError
 
     def sample_backward(
         self
