@@ -100,29 +100,31 @@ class TDMDiffusion(BaseDiffusion):
         constant_t: float = 1.0, # constant time if t_dist_kw is "constant"
         return_time: bool = False # whether to return the time tensor for training
         ):
+        device = f0.device
+        dtype = f0.dtype
         batch_size = f0.shape[0]
         n_points = f0.shape[1]
         dim = f0.shape[2]
 
         # sample time uniformly
         if t_dist_kw == "uniform":
-            ts = torch.rand(size=(batch_size,)) * total_time # shape (batch_size)
+            ts = torch.rand(size=(batch_size,), device=device, dtype=dtype) * total_time # shape (batch_size)
             ts = ts.view(batch_size,1 ,1).expand(batch_size, n_points, dim) # shape (batch_size, n_points, dim)
         elif t_dist_kw == "linear":
-            ts = torch.linspace(0, total_time, n_steps) # shape (n_steps)
+            ts = torch.linspace(0, total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
             ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1) # shape (batch_size, n_steps)
         elif t_dist_kw == "constant":
-            ts = constant_t * torch.ones(size=(batch_size, n_points, dim))
+            ts = constant_t * torch.ones(size=(batch_size, n_points, dim), device=device, dtype=dtype)
         if v0_dist_kw == "zero":
-            v0s = torch.zeros(size=f0.shape) # shape (batch_size, n_points, dim)
+            v0s = torch.zeros(size=f0.shape, device=device, dtype=dtype) # shape (batch_size, n_points, dim)
         else:
-            v0s = torch.randn(size=f0.shape) # shape (batch_size, n_points, dim)
+            v0s = torch.randn(size=f0.shape, device=device, dtype=dtype) # shape (batch_size, n_points, dim)
         # calculate mu and sigma for sampling vt
         mu_vt = self.sde.mean_t_coeff(ts) * v0s
         sigma_vt = self.sde.sigma_t(ts)
 
         # sampling vt
-        epsv = torch.randn(size=v0s.shape)
+        epsv = torch.randn(size=v0s.shape, device=device, dtype=dtype)
         vts = epsv*sigma_vt + mu_vt
 
         # obtain score of v
@@ -137,10 +139,11 @@ class TDMDiffusion(BaseDiffusion):
         # fractional coordinate ft = f0expm(rt), 
         # Eq(15) shows f0expm(rt) = wrap(f0+rt)
         fts = wrap_angle(f0 + wrapped_rts)
-        scorec = self._score_c(vts, v0s, ts)
+        scorec = self._score_c(vts, v0s, ts, wrapped_rts)
 
         score = scorec + scorev
         latents = (vts, fts)
+        # print(f"min sigma_rt={self._sigma_rt(ts).min()}, max sigma_rt={self._sigma_rt(ts).max()}")
         if return_time:
             return latents, score, ts[:,0,0] # (B,)
         # latents = (vts/ self.f_scale, fts/ self.f_scale) # (normalized vt, normalized ft)
@@ -158,7 +161,7 @@ class TDMDiffusion(BaseDiffusion):
     def _sample_r_given_v(self, vt, v0,t):
         mu_rt = self._mu_rt(vt, v0, t)
         sigma_rt = self._sigma_rt(t)
-        epsrt = torch.randn(size=vt.shape)
+        epsrt = torch.randn(size=vt.shape, device=vt.device, dtype=vt.dtype)
         rt_raw = sigma_rt * epsrt + mu_rt
         wrapped_rt = wrap_angle(rt_raw) 
         return wrapped_rt
@@ -174,14 +177,14 @@ class TDMDiffusion(BaseDiffusion):
         sigma_vt = self.sde.sigma_t(t)
 
         # sampling vt
-        epsv = torch.randn(size=v0.shape)
+        epsv = torch.randn(size=v0.shape, device=v0.device, dtype=v0.dtype)
         vt = epsv*sigma_vt + mu_vt
         return vt
 
-    def _score_c(self, vt,v0,t):
+    def _score_c(self, vt,v0,t, rt):
         mu_rt = self._mu_rt(vt, v0, t)
-        sigma_rt = wrap_angle(self._sigma_rt(t))
-        rt = self._sample_r_given_v(vt, v0, t)
+        sigma_rt = self._sigma_rt(t)
+        mu_rt = wrap_angle(mu_rt)
         WN_distribution = WrappedNormalDistribution(mu_rt, sigma_rt, self.trunc_n)
         scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt)
         return scorec
@@ -198,6 +201,8 @@ class TDMDiffusion(BaseDiffusion):
         assert pred.shape == target.shape
         #with reweighting
         reweighting_term = self.sde.sigma_t(t)
+        #map the reweighting_term to the same shape as pred and target
+        reweighting_term = reweighting_term[:, None, None].expand(-1, pred.shape[1], pred.shape[2])
         loss = torch.nn.functional.mse_loss(pred * reweighting_term, target * reweighting_term)
         return loss
 

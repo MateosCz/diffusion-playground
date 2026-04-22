@@ -22,6 +22,10 @@ class TDM_SimpleScoreMLP(nn.Module):
         self.with_sincos_position = with_sincos_position
         self.score_net = nn.Sequential()
         self.x_lifting_dim = x_lifting_dim
+        if self.with_sincos_position:
+            self.dim = self.dim + self.dim * 2 # add sin cos position dimension to the input data
+        self.dim = self.dim + 2 # add vt dimension to the input data
+        
         self.lifting_layer_x = nn.Linear(self.dim, self.x_lifting_dim)
         self.lifting_layer_hidden = nn.Linear(self.x_lifting_dim + self.time_embedding_dim, self.hidden_dim_list[0])
         for i in range(len(self.hidden_dim_list[:-1])):
@@ -47,7 +51,8 @@ class TDM_SimpleScoreMLP(nn.Module):
         if self.with_sincos_position:
             sinx = torch.sin(x)
             cosx = torch.cos(x)
-            x = torch.concat([sinx, cosx], dim=-1) 
+            sincos_x = torch.concat([sinx, cosx], dim=-1) 
+            x = torch.cat([x, sincos_x], dim=-1)
         x = torch.cat([x, vt], dim=-1)
         if t.ndim == 3:
             t = t[:,0,:]
@@ -68,6 +73,7 @@ class TDM_SimpleScoreMLP(nn.Module):
             else:
                 raise ValueError(f"Input data dimension must be (n_points,dim) or (batch_size, n_points, dim), got {x.shape}")
         # lift x first
+
         x = self.lifting_layer_x(x) # x: (B, n_points, x_lifting_dim)
         h_emb = torch.cat([x, t_emb], dim=-1) # (B, n_points, x_lifting_dim + time_embedding_dim)
         # lifting layer, lift the dimension of the input to the hidden_dim_list[0]
