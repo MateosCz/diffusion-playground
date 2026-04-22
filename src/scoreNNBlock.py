@@ -8,6 +8,7 @@ class SinusoidalTimeEmbedding(nn.Module):
     For each frequency w_i:
       emb[..., i]            = sin(2*pi*t*w_i)
       emb[..., i + half_dim] = cos(2*pi*t*w_i)
+    return the embedding with shape (B, dim)
     """
     def __init__(self, dim: int, max_period: float = 10000.0, use_2pi: bool = True):
         super().__init__()
@@ -40,3 +41,5 @@ class SinusoidalTimeEmbedding(nn.Module):
             angles = angles * (2.0 * math.pi)
         emb = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (B, dim)
         return emb
+
+    

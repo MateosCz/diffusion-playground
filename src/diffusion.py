@@ -97,7 +97,8 @@ class TDMDiffusion(BaseDiffusion):
         t_dist_kw: Literal["uniform", "linear", "constant"]="uniform", 
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
         n_steps: int = 100, # number of time steps if t_dist_kw is "linear"
-        constant_t: float = 1.0 # constant time if t_dist_kw is "constant"
+        constant_t: float = 1.0, # constant time if t_dist_kw is "constant"
+        return_time: bool = False # whether to return the time tensor for training
         ):
         batch_size = f0.shape[0]
         n_points = f0.shape[1]
@@ -140,6 +141,8 @@ class TDMDiffusion(BaseDiffusion):
 
         score = scorec + scorev
         latents = (vts, fts)
+        if return_time:
+            return latents, score, ts[:,0,0] # (B,)
         # latents = (vts/ self.f_scale, fts/ self.f_scale) # (normalized vt, normalized ft)
         return latents, score
 
