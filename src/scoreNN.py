@@ -3,7 +3,7 @@ import torch
 import src.scoreNNBlock as Block
 from typing import Sequence, Union
 
-class SimpleScoreMLP(nn.Module):
+class TDM_SimpleScoreMLP(nn.Module):
     def __init__(
         self,
         dim:int,
@@ -11,6 +11,7 @@ class SimpleScoreMLP(nn.Module):
         time_embedding_dim: int,
         hidden_dim: Union[Sequence[int], int],
         output_dim: int,
+        with_sincos_position: bool = False,
         **kwargs):
         super().__init__()
         self.dim = dim
@@ -18,28 +19,40 @@ class SimpleScoreMLP(nn.Module):
         self.output_dim = output_dim
         self.time_embedding_dim = time_embedding_dim
         self.time_embedding_layer = Block.SinusoidalTimeEmbedding(self.time_embedding_dim)
+        self.with_sincos_position = with_sincos_position
         self.score_net = nn.Sequential()
         self.x_lifting_dim = x_lifting_dim
         self.lifting_layer_x = nn.Linear(self.dim, self.x_lifting_dim)
         self.lifting_layer_hidden = nn.Linear(self.x_lifting_dim + self.time_embedding_dim, self.hidden_dim_list[0])
         for i in range(len(self.hidden_dim_list[:-1])):
             self.score_net.add_module(f"hidden_layer_{i}", nn.Linear(self.hidden_dim_list[i], self.hidden_dim_list[i+1]))
-            self.score_net.add_module(f"relu_{i}", nn.ReLU())
+            self.score_net.add_module(f"relu_{i}", nn.GELU())
         self.score_net.add_module(f"output_layer", nn.Linear(self.hidden_dim_list[-1], self.output_dim))
 
 
     """
     x: (batch_size, n_points, dim) or (n_points, dim), input data
+    vt: (batch_size, n_points, dim) or (n_points, dim), velocity tensor at time t,
+    vt should have the same shape as x
     t: (batch_size, n_points, 1) or (batch_size, 1) or (batch_size,) or (), time tensor
     time embedding layer accept time as (), (B,), or (B,1), 
     so we only check the time with ndim 3
+    return the score of the input data, shape (batch_size, n_points, output_dim)
     """
-    def forward(self,x: torch.Tensor, t: torch.Tensor):
+    def forward(self,x: torch.Tensor, vt: torch.Tensor, t: torch.Tensor):
+        # check if the shape of x and vt are the same
+        if x.shape != vt.shape:
+            raise ValueError(f"Input data and velocity tensor dimension must be the same, got {x.shape} and {vt.shape}")
+        # first check if the sin cos position is needed
+        if self.with_sincos_position:
+            sinx = torch.sin(x)
+            cosx = torch.cos(x)
+            x = torch.concat([sinx, cosx], dim=-1) 
+        x = torch.cat([x, vt], dim=-1)
         if t.ndim == 3:
             t = t[:,0,:]
         else:
             raise ValueError(f"Time dimension must be scalar, (B,), or (B,1) or (B, n_points, 1), got {t.shape}")
-
 
 
         t_emb = self.time_embedding_layer(t) # t_emb: (B, dim)
