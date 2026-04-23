@@ -34,7 +34,7 @@ class WrappedNormalDistribution():
         C_2 = 0
         C = 0
         for k in range(-self.trunc_n, self.trunc_n+1):
-            C_component = torch.exp(-(x - self.mu + k * T)**2)/(2*self.sigma**2)
+            C_component = torch.exp((-(x - self.mu + k * T)**2)/(2*self.sigma**2))
             C2_component = (x - self.mu + k *T) / self.sigma**2
             C_2 += C_component * C2_component
             C += C_component

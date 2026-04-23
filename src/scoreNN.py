@@ -12,6 +12,7 @@ class TDM_SimpleScoreMLP(nn.Module):
         hidden_dim: Union[Sequence[int], int],
         output_dim: int,
         with_sincos_position: bool = False,
+        only_sincos_position: bool = False,
         **kwargs):
         super().__init__()
         self.dim = dim
@@ -20,17 +21,22 @@ class TDM_SimpleScoreMLP(nn.Module):
         self.time_embedding_dim = time_embedding_dim
         self.time_embedding_layer = Block.SinusoidalTimeEmbedding(self.time_embedding_dim)
         self.with_sincos_position = with_sincos_position
+        self.only_sincos_position = only_sincos_position
         self.score_net = nn.Sequential()
         self.x_lifting_dim = x_lifting_dim
+        
         if self.with_sincos_position:
-            self.dim = self.dim + self.dim * 2 # add sin cos position dimension to the input data
+            if self.only_sincos_position:
+                self.dim = self.dim * 2 # only use sin cos position dimension to the input data
+            else:   
+                self.dim = self.dim + self.dim * 2 # add sin cos position dimension to the input data
         self.dim = self.dim + 2 # add vt dimension to the input data
         
         self.lifting_layer_x = nn.Linear(self.dim, self.x_lifting_dim)
         self.lifting_layer_hidden = nn.Linear(self.x_lifting_dim + self.time_embedding_dim, self.hidden_dim_list[0])
         for i in range(len(self.hidden_dim_list[:-1])):
             self.score_net.add_module(f"hidden_layer_{i}", nn.Linear(self.hidden_dim_list[i], self.hidden_dim_list[i+1]))
-            self.score_net.add_module(f"relu_{i}", nn.GELU())
+            self.score_net.add_module(f"leaky_relu_{i}", nn.LeakyReLU(negative_slope=0.01))
         self.score_net.add_module(f"output_layer", nn.Linear(self.hidden_dim_list[-1], self.output_dim))
 
 
@@ -52,7 +58,10 @@ class TDM_SimpleScoreMLP(nn.Module):
             sinx = torch.sin(x)
             cosx = torch.cos(x)
             sincos_x = torch.concat([sinx, cosx], dim=-1) 
-            x = torch.cat([x, sincos_x], dim=-1)
+            if self.only_sincos_position:
+                x = sincos_x
+            else:
+                x = torch.cat([x, sincos_x], dim=-1)
         x = torch.cat([x, vt], dim=-1)
         if t.ndim == 3:
             t = t[:,0,:]
