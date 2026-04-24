@@ -5,10 +5,11 @@ diffusion models
 from torch import nn
 import torch
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Literal, Sequence
+from typing import Any, Optional, Literal, Sequence, Callable, Tuple
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
 from src.data import pos_to_angle, wrap_angle
 from src.distribution import WrappedNormalDistribution
+
 
 
 """
@@ -109,7 +110,7 @@ class TDMDiffusion(BaseDiffusion):
         # sample time uniformly
         if t_dist_kw == "uniform":
             ts = torch.rand(size=(batch_size,), device=device, dtype=dtype) * total_time # shape (batch_size)
-            ts = ts.view(batch_size,1 ,1).expand(batch_size, n_points, dim) # shape (batch_size, n_points, dim)
+            ts = ts.view(batch_size,1,1).expand(batch_size, n_points, dim) # shape (batch_size, n_points, dim)
         elif t_dist_kw == "linear":
             ts = torch.linspace(0, total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
             ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1) # shape (batch_size, n_steps)
@@ -173,12 +174,12 @@ class TDMDiffusion(BaseDiffusion):
         return torch.sqrt(2*t + 8/(torch.exp(t)+1) -4 + eps)
         
     def _sample_vt_given_v0(self,v0,t):
-        mu_vt = self.sde.mean_t_coeff(t)
+        mu_coeff_vt = self.sde.mean_t_coeff(t)
         sigma_vt = self.sde.sigma_t(t)
 
         # sampling vt
         epsv = torch.randn(size=v0.shape, device=v0.device, dtype=v0.dtype)
-        vt = epsv*sigma_vt + mu_vt
+        vt = epsv*sigma_vt + mu_coeff_vt * v0 #mu_coeff_vt is the coefficient of mu
         return vt
 
     def _score_c(self, vt,v0,t, rt):
@@ -206,14 +207,74 @@ class TDMDiffusion(BaseDiffusion):
         loss = torch.nn.functional.mse_loss(pred * reweighting_term, target * reweighting_term)
         return loss
 
-        
+    
+
+
     def sample_backward(
         self,
+        fT_prior_kw: Literal["stdGauss", "uniform"],
+        vT_prior_kw: Literal["stdGauss", "uniform"],
+        data_shape: Tuple[int, int, int],
+        total_time: float,
+        tdm_score_fn: Callable[[torch.Tensor,torch.Tensor,torch.Tensor],torch.Tensor], 
+        # score function of TDM model, input f_t, v_t, t, return the score
+        n_steps: int = 100,
+        sample_trajectory: bool = False,
+        **kwargs
 
     ):
-        raise NotImplementedError
+        assert fT_prior_kw in ["stdGauss", "uniform"]
+        assert vT_prior_kw in ["stdGauss", "uniform"]
+        device = next(self.parameters()).device # obtain the device of the model from parameters
+        dtype = next(self.parameters()).dtype # obtain the dtype of the model from parameters
+        batch_size = data_shape[0]
+        n_points = data_shape[1]
+        dim = data_shape[2]
 
-    def sample_backward_sim(
-        self
-    ):
-        raise NotImplementedError
+        dt = total_time / n_steps # calculate the dt
+        # sample fT and vT from prior distribution
+        if fT_prior_kw == "stdGauss":
+            fT = torch.randn(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+        else:
+            fT = torch.rand(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+            fT = pos_to_angle(fT)
+            fT = wrap_angle(fT)
+        if vT_prior_kw == "stdGauss":
+            vT = torch.randn(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+        else:
+            vT = torch.rand(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+        ft_reverse = fT
+        vt_reverse = vT
+        ft_reverse_trajectory = [ft_reverse]
+        vt_reverse_trajectory = [vt_reverse]
+        t_list = [total_time]
+
+        # reverse time step by step
+        for i in range(n_steps):
+            t_reverse = total_time - i * dt
+            score_total_reverse = tdm_score_fn(ft_reverse, vt_reverse, t_reverse)
+            scorev_reverse = self._get_scorev_from_scorec(score_total_reverse, vt_reverse, t_reverse)
+            eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+
+            # using exponential integration to solve the sde backward step
+            vt_reverse = torch.exp(dt) * vt_reverse + 2 * (torch.exp(2*dt)-1)* scorev_reverse + torch.sqrt(torch.exp(2 * dt) - 1) * eps_v
+            ft_reverse = ft_reverse + dt * vt_reverse
+            ft_reverse = wrap_angle(ft_reverse)
+            ft_reverse_trajectory.append(ft_reverse)
+            vt_reverse_trajectory.append(vt_reverse)
+            t_list.append(t_reverse)
+        if sample_trajectory:
+            return ft_reverse_trajectory, vt_reverse_trajectory, t_list
+        else:
+            return ft_reverse, vt_reverse
+            
+
+
+
+    #Eq(19) in KLDM paper, v0 is 0
+    def _get_scorev_from_scorec(self, scorec, vt, t): 
+        scorev = self._prefector(t) * scorec - vt/(self.sde.sigma_t(t)**2) # only for v0 = 0
+        return scorev
+
+    def _get_prefector(self, t):
+        return (1-torch.exp(-t))/(1+torch.exp(-t))

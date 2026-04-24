@@ -14,7 +14,7 @@ def main():
     # -----------------------
     device = "cuda" if torch.cuda.is_available() else "cpu"
     batch_size = 32
-    n_epoch = 200
+    n_epoch = 400
     lr = 1e-3
     total_time = 2.0
     # data shape: each sample -> (num_points, dim)
@@ -22,14 +22,14 @@ def main():
     dim = 2
     # model
     x_lifting_dim = 32
-    time_embedding_dim = 16  # must be even
+    time_embedding_dim = 32  # must be even
     hidden_dim = [64, 64]
     output_dim = dim
     # dataset
     base_ds = Checkerboard_Dataset(
         num_rows=4,
         num_points=num_points,
-        dataset_size=1000
+        dataset_size=2000
     )
     lie_ds = TorusLieWrapper(base_ds)
     angle_ds = AngleTorusWrapper(lie_ds)  # each item: (num_points, 2) in [-pi, pi)
@@ -48,7 +48,8 @@ def main():
         time_embedding_dim=time_embedding_dim,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        with_sincos_position=True
+        with_sincos_position=True,
+        only_sincos_position=False
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # -----------------------

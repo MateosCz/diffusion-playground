@@ -76,7 +76,7 @@ class BaseSDE(ABC, nn.Module):
         g = self.diffusion(zt,t)
         """
         when eta is 0, then the reverse diffusion sample the probability flow ODE:
-        dx = (f(x,t) - 1/2 g(x,t) * g(x,t)^T * score) dt
+        dx = (f(x,t) - 1/2 g(x,t) * g(x,t)^T * score) dt + g(x,t) dW
         rather than from SDE:
         dx = (f(x,t) - g(x,t) * g(x,t)^T * score) dt + g(x,t) dW
         
