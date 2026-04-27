@@ -12,6 +12,8 @@ class TDM_SimpleScoreMLP(nn.Module):
         hidden_dim: Union[Sequence[int], int],
         output_dim: int,
         total_time: float = 2.0,
+        time_embedding_scale: float = 1.0,
+        position_fourier_bands: int = 1,
         with_sincos_position: bool = False,
         only_sincos_position: bool = False,
         **kwargs):
@@ -21,6 +23,8 @@ class TDM_SimpleScoreMLP(nn.Module):
         self.output_dim = output_dim
         self.time_embedding_half_dim = time_embedding_half_dim
         self.total_time = total_time
+        self.time_embedding_scale = time_embedding_scale
+        self.position_fourier_bands = position_fourier_bands
         # self.time_embedding_layer = Block.SinusoidalTimeEmbedding(self.time_embedding_dim)
         self.with_sincos_position = with_sincos_position
         self.only_sincos_position = only_sincos_position
@@ -28,10 +32,11 @@ class TDM_SimpleScoreMLP(nn.Module):
         self.x_lifting_dim = x_lifting_dim
         self.v_dim = self.dim
         if self.with_sincos_position:
+            sincos_dim = self.dim * 2 * self.position_fourier_bands
             if self.only_sincos_position:
-                self.dim = self.dim * 2 # only use sin cos position dimension to the input data
+                self.dim = sincos_dim # only use sin cos position dimension to the input data
             else:   
-                self.dim = self.dim + self.dim * 2 # add sin cos position dimension to the input data
+                self.dim = self.dim + sincos_dim # add sin cos position dimension to the input data
         self.dim = self.dim + self.v_dim # add vt dimension to the input data
         
         self.lifting_layer_x = nn.Sequential(
@@ -71,16 +76,27 @@ class TDM_SimpleScoreMLP(nn.Module):
             raise ValueError(f"Input data and velocity tensor dimension must be the same, got {x.shape} and {vt.shape}")
         # first check if the sin cos position is needed
         if self.with_sincos_position:
-            sinx = torch.sin(x)
-            cosx = torch.cos(x)
-            sincos_x = torch.concat([sinx, cosx], dim=-1) 
+            frequencies = torch.arange(
+                1,
+                self.position_fourier_bands + 1,
+                device=x.device,
+                dtype=x.dtype,
+            )
+            x_freq = x.unsqueeze(-1) * frequencies
+            sincos_x = torch.cat(
+                [
+                    torch.sin(x_freq).flatten(start_dim=-2),
+                    torch.cos(x_freq).flatten(start_dim=-2),
+                ],
+                dim=-1,
+            )
             if self.only_sincos_position:
                 x = sincos_x
             else:
                 x = torch.cat([x, sincos_x], dim=-1)
         x = torch.cat([x, vt], dim=-1)
         t_norm = t/self.total_time
-        t_emb = Block.sinusoidal_time_embedding(t_norm * 1000, self.time_embedding_half_dim)
+        t_emb = Block.sinusoidal_time_embedding(t_norm * self.time_embedding_scale, self.time_embedding_half_dim)
         h_t = self.lifting_layer_t(t_emb)
         # t_emb = self.time_embedding_layer(t) # t_emb: (B, dim)
         # lift x first
