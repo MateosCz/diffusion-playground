@@ -8,28 +8,28 @@ from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper
 from src.scoreNN import TDM_SimpleScoreMLP
 from src.diffusion import TDMDiffusion
 
+
+
 def main():
     # -----------------------
     # Config (simple defaults)
     # -----------------------
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    batch_size = 32
-    n_epoch = 200
+    batch_size = 512
+    n_epoch = 50
     lr = 1e-3
     total_time = 2.0
     # data shape: each sample -> (num_points, dim)
-    num_points = 10000
     dim = 2
     # model
-    x_lifting_dim = 32
-    time_embedding_dim = 16  # must be even
-    hidden_dim = [64, 64]
+    x_lifting_dim = 64
+    time_embedding_half_dim = 32  # must be even
+    hidden_dim = [512,512]
     output_dim = dim
     # dataset
     base_ds = Checkerboard_Dataset(
         num_rows=4,
-        num_points=num_points,
-        dataset_size=1000
+        dataset_size= 50000
     )
     lie_ds = TorusLieWrapper(base_ds)
     angle_ds = AngleTorusWrapper(lie_ds)  # each item: (num_points, 2) in [-pi, pi)
@@ -37,18 +37,17 @@ def main():
         angle_ds,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
-        drop_last=True,
     )
     # diffusion + score model
-    diffusion = TDMDiffusion(dim=dim, integrator_type="Euler").to(device)
+    diffusion = TDMDiffusion(dim=dim, integrator_type="Euler", simplified_param=True).to(device)
     model = TDM_SimpleScoreMLP(
         dim=dim,
         x_lifting_dim=x_lifting_dim,
-        time_embedding_dim=time_embedding_dim,
+        time_embedding_half_dim=time_embedding_half_dim,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        with_sincos_position=True
+        with_sincos_position=True,
+        only_sincos_position=True
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # -----------------------
@@ -73,11 +72,15 @@ def main():
                 v0_dist_kw="zero",
                 return_time=True,
             )
+    
             # simplest choice: use f_t as network input
             # your current model expects t.ndim==3; make (B, num_points, 1)
-            t_for_net = t_scalar[:, None, None].expand(-1, f_t.shape[1], 1)
-            pred_score = model(f_t,v_t, t_for_net)  # (B, num_points, 2)
-            loss = diffusion.loss_diffusion_reweighting(pred_score, target_score, t_scalar)
+            # t_for_net = t_scalar[:, None, None].expand(-1, f_t.shape[1], 1)
+            # t_for_score = t_scalar[:, None, None].expand(-1, f_t.shape[1], f_t.shape[2])
+            # target_score = (1- torch.exp(-t_for_score))/(1 + torch.exp(-t_for_score)) * target_score - v_t/ (diffusion.sde.sigma_t(t_for_score)**2)
+
+            pred_score = model(f_t,v_t, t_scalar)  # (B, num_points, 2)
+            loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
             
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -94,7 +97,7 @@ def main():
     
     # plot loss curve
     plt.figure(figsize=(6, 4))
-    plt.plot(range(1, n_epoch + 1), epoch_losses, marker="o")
+    plt.plot(range(1, n_epoch + 1), epoch_losses, marker="x", linewidth=1, markersize=5, linestyle="--", color="gold", markeredgecolor="green")
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
     plt.title("Training Loss")
