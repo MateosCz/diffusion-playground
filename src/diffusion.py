@@ -7,8 +7,9 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence, Callable, Tuple
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
-from src.data import pos_to_angle, wrap_angle
-from src.distribution import WrappedNormalDistribution
+from src.data import pos_to_angle, wrap_angle, wrap_pos
+from src.distribution import WrappedNormalDistribution, sigma_norm
+import math
 
 
 
@@ -65,9 +66,11 @@ class TDMDiffusion(BaseDiffusion):
         dim: Sequence[int] | int, 
         integrator_type: Literal["Exp", "Euler"], 
         sde: Optional[BaseSDE | None] = None, 
-        trunc_n: int = 10,
+        trunc_n: int = 13,
         f_scale: float = 2 * torch.pi,
-        simplified_param: bool = True
+        total_time: float = 2.0,
+        simplified_param: bool = True,
+        n_sigma_rs:int = 2000
         ):
         super().__init__()
         if sde is None:
@@ -79,7 +82,12 @@ class TDMDiffusion(BaseDiffusion):
         self.trunc_n = trunc_n
         self.f_scale = f_scale
         self.simplified_param = simplified_param
-        
+        self.n_sigma_rs = n_sigma_rs
+        self.total_time = total_time
+        if simplified_param:
+            sigma_rs = self._sigma_rt(torch.linspace(0, total_time, self.n_sigma_rs))
+            sigma_norms_r = sigma_norm(sigma_rs, T=2 * torch.pi, N=self.trunc_n, sn=self.n_sigma_rs)
+            self.register_buffer("sigma_norms_r", sigma_norms_r)
 
 
     def _get_integrator_by_name(self, integrator_type, sde):
@@ -136,6 +144,7 @@ class TDMDiffusion(BaseDiffusion):
         # obtain score of v
         if v0_dist_kw == "zero":
             scorev = -vts/(sigma_vt**2)
+            # scorev = -epsv/sigma_vt
         else:
             scorev = -epsv/sigma_vt
 
@@ -154,10 +163,10 @@ class TDMDiffusion(BaseDiffusion):
         # only return the score of wrapped normal distribution(\nabla log p(r_t))
         if self.simplified_param:
             scorec = self._score_c(vts, v0s, ts, wrapped_rts, with_prefector=False)
-            sigma_norm = torch.sqrt(self._sigma_norm_t(ts))
+            sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(ts))
 
-            # score = scorec / sigma_norm
-            score = scorec
+            score = scorec / sigma_norm_r_t
+            # score = scorec
         else:
             scorec = self._score_c(vts, v0s, ts, wrapped_rts, with_prefector=True)
             score = scorec + scorev
@@ -192,7 +201,7 @@ class TDMDiffusion(BaseDiffusion):
     def _sigma_rt(self, t, eps = 1e-6):
         return torch.sqrt(2*t + 8/(torch.exp(t)+1) -4 + eps)
         
-    def _sample_vt_given_v0(self,v0,t):
+    def _sample_vt_given_v0(self,v0,t, dt):
         mu_coeff_vt = self.sde.mean_t_coeff(t)
         sigma_vt = self.sde.sigma_t(t)
 
@@ -204,7 +213,7 @@ class TDMDiffusion(BaseDiffusion):
     def _score_c(self, vt,v0,t, rt, with_prefector=True):
         mu_rt = self._mu_rt(vt, v0, t)
         sigma_rt = self._sigma_rt(t)
-        mu_rt = wrap_angle(mu_rt)
+        # mu_rt = wrap_angle(mu_rt)
         WN_distribution = WrappedNormalDistribution(mu_rt, sigma_rt, self.trunc_n)
         if with_prefector:
             scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt)
@@ -276,22 +285,28 @@ class TDMDiffusion(BaseDiffusion):
         for i in range(n_steps):
             
             score_total_reverse = tdm_score_fn(ft_reverse, vt_reverse, t_reverse)
+            eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
             if self.simplified_param:
                 prefactor = self._get_prefector(t_reverse)
-                sigma_norm = torch.sqrt(self._sigma_norm_t(t_reverse))
+                sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_reverse))
                 sigma_v = self.sde.sigma_t(t_reverse)
-                # scorev_reverse = score_total_reverse * prefactor * sigma_norm - vt_reverse / (sigma_v**2)
-                scorev_reverse = score_total_reverse * prefactor - vt_reverse / (sigma_v**2)
+                scorev_reverse = score_total_reverse * prefactor * sigma_norm_r_t - vt_reverse / (sigma_v**2)
+                # scorev_reverse = score_total_reverse * prefactor * sigma_norm - eps_v / sigma_v
+                # scorev_reverse = score_total_reverse * prefactor - vt_reverse / (sigma_v**2)
             else:
             # scorev_reverse = self._get_scorev_from_scoreall(score_total_reverse, vt_reverse, t_reverse)
                 scorev_reverse = score_total_reverse
-            eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+            
             # eps_v = self.center_data(eps_v)
 
-            # using exponential integration to solve the sde backward step
-            vt_reverse = (torch.exp(dt) * vt_reverse +
-                            2 * (torch.expm1(dt)) * scorev_reverse + 
-                            torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+            # # using exponential integration to solve the sde backward step
+            # vt_reverse = (torch.exp(dt) * vt_reverse +
+            #                 2 * (torch.expm1(dt)) * scorev_reverse + 
+            #                 torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+
+            # using euler integration to solve the sde backward step
+            vt_reverse = -vt_reverse * dt - 2 * scorev_reverse * dt + torch.sqrt(2 * dt) * eps_v
+
             ft_reverse = ft_reverse - dt * vt_reverse
             ft_reverse = wrap_angle(ft_reverse)
             if sample_trajectory:
@@ -324,7 +339,7 @@ class TDMDiffusion(BaseDiffusion):
     def center_data(self, data):
         return data - torch.mean(data, dim=0, keepdim=True)
 
-    def _sigma_norm_t(self, t):
-        """Simple 1/σ_rt² approximation."""
-        sigma_rt = self._sigma_rt(t)
-        return 1.0 / (sigma_rt ** 2)
+    def _sigma_norm_t(self, t: torch.Tensor):
+        idx = torch.round(t / self.total_time * (len(self.sigma_norms_r))).long() - 1
+        return self.sigma_norms_r[idx]
+        

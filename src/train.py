@@ -16,11 +16,10 @@ def main():
     # -----------------------
     device = "cuda" if torch.cuda.is_available() else "cpu"
     batch_size = 512
-    n_epoch = 100
-    lr = 1e-4
+    n_epoch = 50
+    lr = 1e-3
     total_time = 2.0
     # data shape: each sample -> (num_points, dim)
-    num_points = 1 # each sample is a point on the torus, do diffusion independently for each point
     dim = 2
     # model
     x_lifting_dim = 64
@@ -40,7 +39,7 @@ def main():
         shuffle=True,
     )
     # diffusion + score model
-    diffusion = TDMDiffusion(dim=dim, integrator_type="Euler").to(device)
+    diffusion = TDMDiffusion(dim=dim, integrator_type="Euler", simplified_param=True).to(device)
     model = TDM_SimpleScoreMLP(
         dim=dim,
         x_lifting_dim=x_lifting_dim,
@@ -48,7 +47,7 @@ def main():
         hidden_dim=hidden_dim,
         output_dim=output_dim,
         with_sincos_position=True,
-        only_sincos_position=False
+        only_sincos_position=True
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # -----------------------
@@ -81,7 +80,7 @@ def main():
             # target_score = (1- torch.exp(-t_for_score))/(1 + torch.exp(-t_for_score)) * target_score - v_t/ (diffusion.sde.sigma_t(t_for_score)**2)
 
             pred_score = model(f_t,v_t, t_scalar)  # (B, num_points, 2)
-            loss = diffusion.loss_diffusion_reweighting(pred_score, target_score, t_scalar)
+            loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
             
             optimizer.zero_grad(set_to_none=True)
             loss.backward()

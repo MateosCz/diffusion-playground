@@ -51,7 +51,7 @@ def sigma_norm(sigma: torch.Tensor, T: float = 2 * torch.pi, N: int = 10, sn: in
     
     sigmas = sigma[None, :].repeat(sn, 1)
     x_sample = sigma * torch.randn_like(sigmas)
-    x_sample = wrap_pos(x_sample, x_range=(2.0 * math.pi) / T)
+    x_sample = wrap_pos(x_sample, x_range=(2.0 * math.pi))
     WN = WrappedNormalDistribution(mu = torch.zeros_like(x_sample), sigma = sigma, trunc_n = N)
     normal_ = WN.score(
         x_sample,T=T
