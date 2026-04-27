@@ -17,7 +17,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     batch_size = 512
     n_epoch = 50
-    lr = 1e-3
+    lr = 1e-2
     total_time = 2.0
     # data shape: each sample -> (num_points, dim)
     dim = 2

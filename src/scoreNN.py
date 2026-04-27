@@ -46,7 +46,7 @@ class TDM_SimpleScoreMLP(nn.Module):
             nn.Linear(2 * self.time_embedding_half_dim, 2 * self.time_embedding_half_dim),
         )
 
-        self.norm = nn.GroupNorm(32, 2 * self.time_embedding_half_dim)
+        self.norm = nn.LayerNorm(2 * self.time_embedding_half_dim)
     
         self.lifting_layer_hidden = nn.Linear(2 * self.time_embedding_half_dim, self.hidden_dim_list[0])
         
@@ -80,7 +80,7 @@ class TDM_SimpleScoreMLP(nn.Module):
                 x = torch.cat([x, sincos_x], dim=-1)
         x = torch.cat([x, vt], dim=-1)
         t_norm = t/self.total_time
-        t_emb = Block.sinusoidal_time_embedding(t_norm, self.time_embedding_half_dim)
+        t_emb = Block.sinusoidal_time_embedding(t_norm * 1000, self.time_embedding_half_dim)
         h_t = self.lifting_layer_t(t_emb)
         # t_emb = self.time_embedding_layer(t) # t_emb: (B, dim)
         # lift x first
