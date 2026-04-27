@@ -84,17 +84,14 @@ class Checkerboard_Dataset(Dataset):
 
     parameters:
         - num_rows: the counts of rows of tiles.
-        - num_points: the counts of points of each sample
         - dataset_size: Virtual length of the dataset (for DataLoader compatibility). 
         Since we generate on the fly, the value is somewhat arbitrary. 
         E.g. DataLoader iterates dataset_size / batch_size steps per epoch. So 10_000 with batch_size=32 gives ~312 steps per epoch.
 
     """
-    def __init__(self, num_rows, num_points, dataset_size = 10000, oversample_factor = 2.5, seed: int| None = None):
+    def __init__(self, num_rows, dataset_size = 10000, seed: int| None = None):
         self.num_rows = num_rows
-        self.num_points = num_points
         self.dataset_size = dataset_size
-        self.oversample_factor = oversample_factor
         self.seed = seed
 
     
@@ -106,22 +103,16 @@ class Checkerboard_Dataset(Dataset):
             generator = torch.Generator().manual_seed(self.seed + idx)
             return self._generate_checkerboard_sample(
                 self.num_rows, 
-                self.num_points, 
-                self.oversample_factor,
                 generator)
         else:
             return self._generate_checkerboard_sample(
                 self.num_rows,
-                self.num_points,
-                self.oversample_factor
             )
 
 
     def _generate_checkerboard_sample(
         self,
         num_rows: int,
-        num_points: int,
-        oversample_factor: float = 2.5,
         generator: torch.Generator = None
     ):
         """
@@ -139,28 +130,20 @@ class Checkerboard_Dataset(Dataset):
         Returns:
             Tensor of shape (n_points, 2) with coordinates in [0, 1).
         """
-        collected = []
-        remaining = num_points
 
-        while remaining > 0:
+        while True:
             # propose candidates uniformly in [0,1)**2
-            num_candidates = int(remaining * oversample_factor) + 1
             if generator is None:
-                candidates = torch.rand(num_candidates, 2) # (N, 2)
+                point = torch.rand(2) # (2,)
             else:
-                candidates = torch.rand(num_candidates, 2, generator=generator)
+                point = torch.rand(2, generator=generator)
 
             # Tile indices for each candidate
-            tile_x = (candidates[:,0] * num_rows).long()
-            tile_y = (candidates[:,1] * num_rows).long()
+            tile_x = (point[0] * num_rows).long()
+            tile_y = (point[1] * num_rows).long()
+            if ((tile_x + tile_y) % 2) == 0:
+                return point  # (2,)
 
-            on_black = ((tile_x + tile_y) % 2 ) ==0
-            accepted = candidates[on_black]
-
-            collected.append(accepted[:remaining])
-            remaining -= len(collected[-1])
-
-        return torch.cat(collected, dim=0) # (n_points, 2)
 
 
 """
@@ -173,7 +156,7 @@ class TorusLieWrapper(Dataset):
     Wraps any dataset that returns (num_points, 2) tensors in [0, 1)
     and converts them to SO(2) x SO(2) rotation matrices.
     
-    Output shape: (num_points, 2, 2, 2) — num_points pairs of 2x2 rotation matrices.    
+    Output shape: (2, 2, 2) — 2x2 rotation matrices.    
     """
 
     def __init__(self, base_dataset):
@@ -197,7 +180,7 @@ class AngleTorusWrapper(Dataset):
     Wraps any dataset that returns rotation matrices in SO(2)
     and converts them to angle torus data in [-pi, pi)
     
-    Output shape: (num_points, dim) — num_points pairs of dim angles in [-pi, pi).    
+    Output shape: (dim) — dim angles in [-pi, pi).    
     """
     def __init__(self, base_dataset):
         self.base = base_dataset
@@ -206,9 +189,9 @@ class AngleTorusWrapper(Dataset):
         return len(self.base)
 
     def __getitem__(self, idx):
-        matrices = self.base[idx]                          # (num_points, dim, 2, 2)
+        matrices = self.base[idx]                          # (dim, 2, 2)
         angles = torch.atan2(matrices[...,1,0], matrices[...,0,0])
-        return angles # (num_points, dim)
+        return angles # (dim,)
 
 """
 Pac-man data generation

@@ -66,7 +66,8 @@ class TDMDiffusion(BaseDiffusion):
         integrator_type: Literal["Exp", "Euler"], 
         sde: Optional[BaseSDE | None] = None, 
         trunc_n: int = 10,
-        f_scale: float = 2 * torch.pi
+        f_scale: float = 2 * torch.pi,
+        simplified_param: bool = True
         ):
         super().__init__()
         if sde is None:
@@ -77,6 +78,8 @@ class TDMDiffusion(BaseDiffusion):
         self.integrator = self._get_integrator_by_name(integrator_type, self.sde)
         self.trunc_n = trunc_n
         self.f_scale = f_scale
+        self.simplified_param = simplified_param
+        
 
 
     def _get_integrator_by_name(self, integrator_type, sde):
@@ -93,7 +96,7 @@ class TDMDiffusion(BaseDiffusion):
 
     def sample_forward(
         self,
-        f0: torch.Tensor, # input Lie group data in angle form, with shape (batch_size, n_points, dim) each point in [-pi, pi)^dim
+        f0: torch.Tensor, # input Lie group data in angle form, with shape (batch_size, dim) each point in [-pi, pi)^dim
         total_time: float, 
         t_dist_kw: Literal["uniform", "linear", "constant"]="uniform", 
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
@@ -104,28 +107,30 @@ class TDMDiffusion(BaseDiffusion):
         device = f0.device
         dtype = f0.dtype
         batch_size = f0.shape[0]
-        n_points = f0.shape[1]
-        dim = f0.shape[2]
+        dim = f0.shape[1]
 
         # sample time uniformly
         if t_dist_kw == "uniform":
-            ts = torch.rand(size=(batch_size,), device=device, dtype=dtype) * total_time # shape (batch_size)
-            ts = ts.view(batch_size,1,1).expand(batch_size, n_points, dim) # shape (batch_size, n_points, dim)
+            ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) # shape (batch_size, 1)
+            # ts = ts.view(batch_size,1).expand(batch_size, dim) # shape (batch_size, dim)
+            ts = ts * (total_time - 1e-2) + 1e-2
         elif t_dist_kw == "linear":
             ts = torch.linspace(0, total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
-            ts = torch.unsqueeze(ts,dim=0).repeat(f0.shape[0],1) # shape (batch_size, n_steps)
+            ts = torch.unsqueeze(ts,dim=0).repeat(batch_size,1) # shape (batch_size, n_steps)
         elif t_dist_kw == "constant":
-            ts = constant_t * torch.ones(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+            ts = constant_t * torch.ones(size=(batch_size,1), device=device, dtype=dtype)
         if v0_dist_kw == "zero":
-            v0s = torch.zeros(size=f0.shape, device=device, dtype=dtype) # shape (batch_size, n_points, dim)
+            v0s = torch.zeros(size=f0.shape, device=device, dtype=dtype) # shape (batch_size, dim)
         else:
-            v0s = torch.randn(size=f0.shape, device=device, dtype=dtype) # shape (batch_size, n_points, dim)
+            v0s = torch.randn(size=f0.shape, device=device, dtype=dtype) # shape (batch_size, dim)
         # calculate mu and sigma for sampling vt
         mu_vt = self.sde.mean_t_coeff(ts) * v0s
         sigma_vt = self.sde.sigma_t(ts)
 
         # sampling vt
         epsv = torch.randn(size=v0s.shape, device=device, dtype=dtype)
+        # epsv = self.center_data(epsv)
+
         vts = epsv*sigma_vt + mu_vt
 
         # obtain score of v
@@ -140,13 +145,26 @@ class TDMDiffusion(BaseDiffusion):
         # fractional coordinate ft = f0expm(rt), 
         # Eq(15) shows f0expm(rt) = wrap(f0+rt)
         fts = wrap_angle(f0 + wrapped_rts)
-        scorec = self._score_c(vts, v0s, ts, wrapped_rts)
+        # fts = self.center_data(fts)
 
-        score = scorec + scorev
+
+        # return the whole score(scorec + scorev), scorec is from Eq(26) in KLDM paper
+        
+
+        # only return the score of wrapped normal distribution(\nabla log p(r_t))
+        if self.simplified_param:
+            scorec = self._score_c(vts, v0s, ts, wrapped_rts, with_prefector=False)
+            sigma_norm = torch.sqrt(self._sigma_norm_t(ts))
+
+            # score = scorec / sigma_norm
+            score = scorec
+        else:
+            scorec = self._score_c(vts, v0s, ts, wrapped_rts, with_prefector=True)
+            score = scorec + scorev
         latents = (vts, fts)
         # print(f"min sigma_rt={self._sigma_rt(ts).min()}, max sigma_rt={self._sigma_rt(ts).max()}")
         if return_time:
-            return latents, score, ts[:,0,0] # (B,)
+            return latents, score, ts # (B, 1)
         # latents = (vts/ self.f_scale, fts/ self.f_scale) # (normalized vt, normalized ft)
         return latents, score
 
@@ -163,6 +181,7 @@ class TDMDiffusion(BaseDiffusion):
         mu_rt = self._mu_rt(vt, v0, t)
         sigma_rt = self._sigma_rt(t)
         epsrt = torch.randn(size=vt.shape, device=vt.device, dtype=vt.dtype)
+        # epsrt = self.center_data(epsrt)
         rt_raw = sigma_rt * epsrt + mu_rt
         wrapped_rt = wrap_angle(rt_raw) 
         return wrapped_rt
@@ -182,12 +201,15 @@ class TDMDiffusion(BaseDiffusion):
         vt = epsv*sigma_vt + mu_coeff_vt * v0 #mu_coeff_vt is the coefficient of mu
         return vt
 
-    def _score_c(self, vt,v0,t, rt):
+    def _score_c(self, vt,v0,t, rt, with_prefector=True):
         mu_rt = self._mu_rt(vt, v0, t)
         sigma_rt = self._sigma_rt(t)
         mu_rt = wrap_angle(mu_rt)
         WN_distribution = WrappedNormalDistribution(mu_rt, sigma_rt, self.trunc_n)
-        scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt)
+        if with_prefector:
+            scorec = (1-torch.exp(-t))/(1+torch.exp(-t)) * WN_distribution.score(rt)
+        else:
+            scorec = WN_distribution.score(rt)
         return scorec
 
     # DSM loss function for training the score network
@@ -203,7 +225,6 @@ class TDMDiffusion(BaseDiffusion):
         #with reweighting
         reweighting_term = self.sde.sigma_t(t)
         #map the reweighting_term to the same shape as pred and target
-        reweighting_term = reweighting_term[:, None, None].expand(-1, pred.shape[1], pred.shape[2])
         loss = torch.nn.functional.mse_loss(pred * reweighting_term, target * reweighting_term)
         return loss
 
@@ -225,44 +246,61 @@ class TDMDiffusion(BaseDiffusion):
     ):
         assert fT_prior_kw in ["stdGauss", "uniform"]
         assert vT_prior_kw in ["stdGauss", "uniform"]
-        device = next(self.parameters()).device # obtain the device of the model from parameters
-        dtype = next(self.parameters()).dtype # obtain the dtype of the model from parameters
+
+        device, dtype = torch.device("cpu"), torch.float32
+
         batch_size = data_shape[0]
-        n_points = data_shape[1]
-        dim = data_shape[2]
+        dim = data_shape[1]
 
         dt = total_time / n_steps # calculate the dt
         # sample fT and vT from prior distribution
         if fT_prior_kw == "stdGauss":
-            fT = torch.randn(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+            fT = torch.randn(size=(batch_size, dim), device=device, dtype=dtype)
         else:
-            fT = torch.rand(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+            fT = torch.rand(size=(batch_size, dim), device=device, dtype=dtype)
             fT = pos_to_angle(fT)
             fT = wrap_angle(fT)
         if vT_prior_kw == "stdGauss":
-            vT = torch.randn(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+            vT = torch.randn(size=(batch_size, dim), device=device, dtype=dtype)
         else:
-            vT = torch.rand(size=(batch_size, n_points, dim), device=device, dtype=dtype)
+            vT = torch.rand(size=(batch_size, dim), device=device, dtype=dtype)
         ft_reverse = fT
         vt_reverse = vT
-        ft_reverse_trajectory = [ft_reverse]
-        vt_reverse_trajectory = [vt_reverse]
-        t_list = [total_time]
+        ft_reverse_trajectory = []
+        vt_reverse_trajectory = []
+        t_list = []
+        t_reverse = torch.ones((batch_size,1), device=device, dtype=dtype) * total_time # shape (batch_size, 1)
+        dt = torch.tensor(dt, device=device, dtype=dtype)
 
         # reverse time step by step
         for i in range(n_steps):
-            t_reverse = total_time - i * dt
+            
             score_total_reverse = tdm_score_fn(ft_reverse, vt_reverse, t_reverse)
-            scorev_reverse = self._get_scorev_from_scorec(score_total_reverse, vt_reverse, t_reverse)
+            if self.simplified_param:
+                prefactor = self._get_prefector(t_reverse)
+                sigma_norm = torch.sqrt(self._sigma_norm_t(t_reverse))
+                sigma_v = self.sde.sigma_t(t_reverse)
+                # scorev_reverse = score_total_reverse * prefactor * sigma_norm - vt_reverse / (sigma_v**2)
+                scorev_reverse = score_total_reverse * prefactor - vt_reverse / (sigma_v**2)
+            else:
+            # scorev_reverse = self._get_scorev_from_scoreall(score_total_reverse, vt_reverse, t_reverse)
+                scorev_reverse = score_total_reverse
             eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+            # eps_v = self.center_data(eps_v)
 
             # using exponential integration to solve the sde backward step
-            vt_reverse = torch.exp(dt) * vt_reverse + 2 * (torch.exp(2*dt)-1)* scorev_reverse + torch.sqrt(torch.exp(2 * dt) - 1) * eps_v
-            ft_reverse = ft_reverse + dt * vt_reverse
+            vt_reverse = (torch.exp(dt) * vt_reverse +
+                            2 * (torch.expm1(dt)) * scorev_reverse + 
+                            torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+            ft_reverse = ft_reverse - dt * vt_reverse
             ft_reverse = wrap_angle(ft_reverse)
-            ft_reverse_trajectory.append(ft_reverse)
-            vt_reverse_trajectory.append(vt_reverse)
-            t_list.append(t_reverse)
+            if sample_trajectory:
+                ft_reverse_trajectory.append(ft_reverse)
+                vt_reverse_trajectory.append(vt_reverse)
+                t_reverse_scalar = t_reverse[0]
+                t_list.append(t_reverse_scalar)
+            t_reverse = t_reverse -  dt
+        
         if sample_trajectory:
             return ft_reverse_trajectory, vt_reverse_trajectory, t_list
         else:
@@ -272,9 +310,21 @@ class TDMDiffusion(BaseDiffusion):
 
 
     #Eq(19) in KLDM paper, v0 is 0
-    def _get_scorev_from_scorec(self, scorec, vt, t): 
-        scorev = self._prefector(t) * scorec - vt/(self.sde.sigma_t(t)**2) # only for v0 = 0
+    def _get_scorev_from_scoreall(self, scoreall, vt, t): 
+        scorev = self._get_prefector(t) * scoreall - vt/(self.sde.sigma_t(t)**2) # only for v0 = 0
         return scorev
 
     def _get_prefector(self, t):
         return (1-torch.exp(-t))/(1+torch.exp(-t))
+
+    """
+    make the sum of data in each dimension to be 0
+    data: (batch_size, 1, dim)
+    """
+    def center_data(self, data):
+        return data - torch.mean(data, dim=0, keepdim=True)
+
+    def _sigma_norm_t(self, t):
+        """Simple 1/σ_rt² approximation."""
+        sigma_rt = self._sigma_rt(t)
+        return 1.0 / (sigma_rt ** 2)
