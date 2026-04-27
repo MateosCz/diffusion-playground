@@ -50,6 +50,7 @@ def main():
         only_sincos_position=True
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epoch)
     # -----------------------
     # Training loop
     # -----------------------
@@ -84,7 +85,9 @@ def main():
             
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            scheduler.step()
             
             running_loss += loss.item()
             pbar.set_postfix(
