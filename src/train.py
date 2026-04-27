@@ -24,7 +24,7 @@ def main():
     # model
     x_lifting_dim = 64
     time_embedding_half_dim = 32  # must be even
-    hidden_dim = [128,128]
+    hidden_dim = [512,512]
     output_dim = dim
     # dataset
     base_ds = Checkerboard_Dataset(

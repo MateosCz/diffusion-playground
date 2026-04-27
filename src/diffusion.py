@@ -300,12 +300,12 @@ class TDMDiffusion(BaseDiffusion):
             # eps_v = self.center_data(eps_v)
 
             # # using exponential integration to solve the sde backward step
-            # vt_reverse = (torch.exp(dt) * vt_reverse +
-            #                 2 * (torch.expm1(dt)) * scorev_reverse + 
-            #                 torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+            vt_reverse = (torch.exp(dt) * vt_reverse +
+                            2 * (torch.expm1(dt)) * scorev_reverse + 
+                            torch.sqrt(torch.expm1(2 * dt)) * eps_v)
 
             # using euler integration to solve the sde backward step
-            vt_reverse = -vt_reverse * dt - 2 * scorev_reverse * dt + torch.sqrt(2 * dt) * eps_v
+            # vt_reverse = -vt_reverse * dt - 2 * scorev_reverse * dt + torch.sqrt(2 * dt) * eps_v
 
             ft_reverse = ft_reverse - dt * vt_reverse
             ft_reverse = wrap_angle(ft_reverse)
