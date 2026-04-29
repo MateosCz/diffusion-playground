@@ -145,6 +145,49 @@ class Checkerboard_Dataset(Dataset):
                 return point  # (2,)
 
 
+class Pacman_Dataset(Dataset):
+    """
+    Pacman maze dataset, uniformly sample from the maze .npy document.
+    directory: data/pacman.npy
+    """
+    def __init__(self, directory, seed: int| None = None):
+        self.directory = directory
+        self.data = torch.tensor(np.load(directory)) # (num_points, 2)
+        self.data_scale = self._get_data_scale()
+        self.data = self._normalize_data(self.data)
+        self.seed = seed
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        if self.seed is not None:
+            generator = torch.Generator().manual_seed(self.seed + idx)
+            return self._generate_pacman_sample(
+                generator)
+        else:
+            return self._generate_pacman_sample()
+
+
+    def _generate_pacman_sample(self, generator: torch.Generator = None):
+        """
+        generate a single pacman sample from
+        """
+        if generator is None:
+            rand_index = torch.randint(0, len(self.data), size=(1,))
+        else:
+            rand_index = torch.randint(0, len(self.data), size=(1,), generator=generator)
+        return self.data[rand_index].squeeze(0)
+    def _get_data_scale(self):
+        """
+        get the scale of the data
+        """
+        return torch.max(self.data) - torch.min(self.data)
+    def _normalize_data(self, data):
+        """
+        normalize the data to [0, 1]
+        """
+        return (data - torch.min(self.data)) / self._get_data_scale()
 
 """
 Lie torus dataset wrapper
@@ -190,7 +233,7 @@ class AngleTorusWrapper(Dataset):
 
     def __getitem__(self, idx):
         matrices = self.base[idx]                          # (dim, 2, 2)
-        angles = torch.atan2(matrices[...,1,0], matrices[...,0,0])
+        angles = torch.atan2(matrices[...,0,1], matrices[...,0,0])
         return angles # (dim,)
 
 """
