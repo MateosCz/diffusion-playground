@@ -110,7 +110,8 @@ class TDMDiffusion(BaseDiffusion):
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
         n_steps: int = 100, # number of time steps if t_dist_kw is "linear"
         constant_t: float = 1.0, # constant time if t_dist_kw is "constant"
-        return_time: bool = False # whether to return the time tensor for training
+        return_time: bool = False, # whether to return the time tensor for training
+        t_min: float = 5e-3,
         ):
         device = f0.device
         dtype = f0.dtype
@@ -121,10 +122,10 @@ class TDMDiffusion(BaseDiffusion):
         if t_dist_kw == "uniform":
             ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) # shape (batch_size, 1)
             # ts = ts.view(batch_size,1).expand(batch_size, dim) # shape (batch_size, dim)
-            ts = ts * (total_time - 1e-2) + 1e-2
+            ts = ts * (total_time - t_min) + t_min
         elif t_dist_kw == "quadratic":
             ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) ** 2
-            ts = ts * (total_time - 1e-2) + 1e-2
+            ts = ts * (total_time - t_min) + t_min
         elif t_dist_kw == "linear":
             ts = torch.linspace(0, total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
             ts = torch.unsqueeze(ts,dim=0).repeat(batch_size,1) # shape (batch_size, n_steps)

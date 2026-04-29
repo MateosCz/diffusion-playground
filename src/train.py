@@ -160,8 +160,7 @@ def main():
     time_embedding_half_dim = 32  # must be even
     time_embedding_scale = 1.0
     position_fourier_bands = 8
-    t_dist_kw = "quadratic"
-    use_weighted_loss = True
+    t_dist_kw = "uniform"
     hidden_dim = [512,512]
     output_dim = dim
     # dataset
@@ -225,10 +224,8 @@ def main():
                 return_time=True,
             )
             pred_score = model(f_t, v_t, t_scalar)  # (B, 2)
-            if use_weighted_loss:
-                loss = weighted_score_loss(pred_score, target_score, t_scalar, total_time)
-            else:
-                loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
+
+            loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
             
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
