@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
-from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper
+from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
 from src.scoreNN import TDM_SimpleScoreMLP
 from src.diffusion import TDMDiffusion
 
@@ -153,6 +153,9 @@ def main():
     n_epoch = 200
     lr = 1e-3
     total_time = 2.0
+    # base_ds_kw = "checkerboard"
+    base_ds_kw = "pacman"
+
     # data shape: each sample -> (dim,)
     dim = 2
     # model
@@ -164,10 +167,15 @@ def main():
     hidden_dim = [512,512]
     output_dim = dim
     # dataset
-    base_ds = Checkerboard_Dataset(
-        num_rows=4,
-        dataset_size= 50000
-    )
+    if base_ds_kw == "checkerboard":
+        base_ds = Checkerboard_Dataset(
+            num_rows=4,
+            dataset_size=50000
+        )
+    elif base_ds_kw == "pacman":
+        base_ds = Pacman_Dataset(
+            directory="data/pacman.npy"
+        )
     lie_ds = TorusLieWrapper(base_ds)
     angle_ds = AngleTorusWrapper(lie_ds)  # each item: (num_points, 2) in [-pi, pi)
     loader = DataLoader(
@@ -175,10 +183,15 @@ def main():
         batch_size=batch_size,
         shuffle=True,
     )
-    val_base_ds = Checkerboard_Dataset(
-        num_rows=4,
-        dataset_size=4096
-    )
+    if base_ds_kw == "checkerboard":
+        val_base_ds = Checkerboard_Dataset(
+            num_rows=4,
+            dataset_size=4096
+        )
+    elif base_ds_kw == "pacman":
+        val_base_ds = Pacman_Dataset(
+            directory="data/pacman.npy"
+        )
     val_lie_ds = TorusLieWrapper(val_base_ds)
     val_angle_ds = AngleTorusWrapper(val_lie_ds)
     val_loader = DataLoader(
@@ -277,10 +290,10 @@ def main():
     plt.title("Training Loss")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig("training_loss.png", dpi=150)
+    plt.savefig(f"training_loss_{base_ds_kw}.png", dpi=150)
     plt.show()
     # save model
-    torch.save(model.state_dict(), "simple_score_mlp_checkerboard.pt")
-    print("Training done. Saved model to simple_score_mlp_checkerboard.pt")
+    torch.save(model.state_dict(), f"simple_score_mlp_{base_ds_kw}.pt")
+    print(f"Training done. Saved model to simple_score_mlp_{base_ds_kw}.pt")
 if __name__ == "__main__":
     main()
