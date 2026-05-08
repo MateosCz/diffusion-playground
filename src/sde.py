@@ -117,11 +117,13 @@ class VPSDE(BaseSDE):
     
     def mean_t_coeff(self, t: torch.Tensor):
         beta_integral = self.schedule.integral_beta(t)
+        beta_integral = torch.abs(beta_integral) # make sure beta_integral is positive
         mean_t_coeff = torch.exp(-0.5 * beta_integral)
         return mean_t_coeff
 
     def sigma_t(self, t:torch.Tensor):
-        beta_integral = self.schedule.integral_beta(t)
+        beta_integral = self.schedule.integral_beta(t) # when t <0, beta_integral is negative, and sqrt of negative number is nan
+        beta_integral = torch.abs(beta_integral) # make sure beta_integral is positive
         sigma_t = torch.sqrt(1-torch.exp(-beta_integral))
         return sigma_t
         
