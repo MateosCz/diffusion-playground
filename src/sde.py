@@ -124,7 +124,7 @@ class VPSDE(BaseSDE):
     def sigma_t(self, t:torch.Tensor):
         beta_integral = self.schedule.integral_beta(t) # when t <0, beta_integral is negative, and sqrt of negative number is nan
         beta_integral = torch.abs(beta_integral) # make sure beta_integral is positive
-        sigma_t = torch.sqrt(1-torch.exp(-beta_integral))
+        sigma_t = torch.sqrt(1-torch.exp(-beta_integral) + 1e-6)
         return sigma_t
         
         
