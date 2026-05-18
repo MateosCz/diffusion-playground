@@ -19,16 +19,20 @@ class TDM_SimpleScoreMLP(nn.Module):
         **kwargs):
         super().__init__()
         self.dim = dim
-        self.hidden_dim_list = hidden_dim
+        if isinstance(hidden_dim, int):
+            hidden_dim = [hidden_dim]
+        self.hidden_dim_list = list(hidden_dim)
         self.output_dim = output_dim
         self.time_embedding_half_dim = time_embedding_half_dim
+        self.time_embedding_dim = 2 * self.time_embedding_half_dim
         self.total_time = total_time
         self.time_embedding_scale = time_embedding_scale
         self.position_fourier_bands = position_fourier_bands
         # self.time_embedding_layer = Block.SinusoidalTimeEmbedding(self.time_embedding_dim)
         self.with_sincos_position = with_sincos_position
         self.only_sincos_position = only_sincos_position
-        self.score_net = nn.Sequential()
+        self.score_net = nn.ModuleList()
+        self.activation = nn.SiLU()
         self.x_lifting_dim = x_lifting_dim
         self.v_dim = self.dim
         if self.with_sincos_position:
@@ -46,19 +50,18 @@ class TDM_SimpleScoreMLP(nn.Module):
         )
 
         self.lifting_layer_t = nn.Sequential(
-            nn.Linear(2 * self.time_embedding_half_dim, 2 * self.time_embedding_half_dim),
+            nn.Linear(self.time_embedding_dim, self.time_embedding_dim),
             nn.SiLU(),
-            nn.Linear(2 * self.time_embedding_half_dim, 2 * self.time_embedding_half_dim),
+            nn.Linear(self.time_embedding_dim, self.time_embedding_dim),
         )
 
-        self.norm = nn.LayerNorm(2 * self.time_embedding_half_dim)
+        self.norm = nn.LayerNorm(self.x_lifting_dim + self.time_embedding_dim)
     
-        self.lifting_layer_hidden = nn.Linear(2 * self.time_embedding_half_dim, self.hidden_dim_list[0])
+        self.lifting_layer_hidden = nn.Linear(self.x_lifting_dim + self.time_embedding_dim, self.hidden_dim_list[0])
         
         for i in range(len(self.hidden_dim_list[:-1])):
-            self.score_net.add_module(f"hidden_layer_{i}", nn.Linear(self.hidden_dim_list[i], self.hidden_dim_list[i+1]))
-            self.score_net.add_module(f"leaky_relu_{i}", nn.SiLU())
-        self.score_net.add_module(f"output_layer", nn.Linear(self.hidden_dim_list[-1], self.output_dim))
+            self.score_net.append(nn.Linear(self.hidden_dim_list[i] + self.time_embedding_dim, self.hidden_dim_list[i+1]))
+        self.output_layer = nn.Linear(self.hidden_dim_list[-1], self.output_dim)
 
 
 
@@ -101,12 +104,15 @@ class TDM_SimpleScoreMLP(nn.Module):
         # t_emb = self.time_embedding_layer(t) # t_emb: (B, dim)
         # lift x first
         h_x = self.lifting_layer_x(x) # x: (B, x_lifting_dim)
-        # h_emb = torch.cat([x, h_t], dim=-1) # (B, x_lifting_dim + time_embedding_dim)
-        h_emb = self.norm(h_x + h_t)
+        h_emb = torch.cat([h_x, h_t], dim=-1) # (B, x_lifting_dim + time_embedding_dim)
+        h_emb = self.norm(h_emb)
 
         # lifting layer, lift the dimension of the input to the hidden_dim_list[0]
         h_emb = self.lifting_layer_hidden(h_emb) # (B, hidden_dim_list[0])
-        h_out = self.score_net(h_emb) # (B, output_dim)
+        for hidden_layer in self.score_net:
+            h_emb = hidden_layer(torch.cat([h_emb, h_t], dim=-1))
+            h_emb = self.activation(h_emb)
+        h_out = self.output_layer(h_emb) # (B, output_dim)
         return h_out
 
         

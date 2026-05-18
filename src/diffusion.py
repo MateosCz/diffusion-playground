@@ -324,12 +324,15 @@ class TDMDiffusion(BaseDiffusion):
                     # only using probability flow ODE as predictor step
                     if exponential_integration:
                         vt_reverse = (torch.exp(dt) * vt_reverse +
-                                        torch.expm1(dt) * scorev_reverse)
-                    else:
+                                        torch.expm1(dt) * scorev_reverse + 
+                                        torch.sqrt(torch.expm1(2 * dt)) * eps_v)
                         # r = self.sde.mean_t_coeff(t_reverse_next) / self.sde.mean_t_coeff(t_reverse)
                         # prefactor_em = (r * self.sde.sigma_t(t_reverse) - self.sde.sigma_t(t_reverse_next)) * self.sde.sigma_t(t_reverse)
                         # vt_reverse = vt_reverse * r + prefactor_em * scorev_reverse 
-                        vt_reverse = vt_reverse - (-vt_reverse - scorev_reverse) * dt
+                    else:
+                        vt_reverse = (vt_reverse - 
+                        (-vt_reverse - scorev_reverse) * dt + 
+                        torch.sqrt(2 * dt) * eps_v)
                 
                 
                 # probability flow sampling strategy
@@ -406,9 +409,14 @@ class TDMDiffusion(BaseDiffusion):
         prefactor = self._get_prefector(t_reverse)
         sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_reverse))
         sigma_v = self.sde.sigma_t(t_reverse)
+        mean_t_coeff = self.sde.mean_t_coeff(t_reverse)
         scorev_reverse = score_learned * prefactor * sigma_norm_r_t - vt_reverse / (sigma_v**2)
+        # alpha_t = mean_t_coeff**2
+        # r = tau
+        # delta = 2 * alpha_t * ((r * eps_v.square()/scorev_reverse.square()) ** 2)
         # denom = scorev_reverse.square().mean(dim=-1, keepdim=True)
-        # delta = tau / denom
+        # sigma_factor = sigma_v**2 / self.sde.sigma_t(torch.tensor(self.total_time, device=device, dtype=dtype))**2
+        # delta = tau / denom * sigma_factor
         delta = tau
         vt_reverse = vt_reverse + delta * scorev_reverse + torch.sqrt(2 * delta) * eps_v
         ft_reverse = ft_reverse - dt * vt_reverse
