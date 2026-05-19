@@ -150,8 +150,8 @@ def main():
     # -----------------------
     device = "cuda" if torch.cuda.is_available() else "cpu"
     batch_size = 512
-    n_epoch = 200
-    lr = 1e-3
+    n_epoch = 2000
+    lr = 8e-4
     total_time = 2.0
     # base_ds_kw = "checkerboard"
     base_ds_kw = "pacman"
@@ -159,12 +159,12 @@ def main():
     # data shape: each sample -> (dim,)
     dim = 2
     # model
-    x_lifting_dim = 64
-    time_embedding_half_dim = 32  # must be even
+    x_lifting_dim = 256
+    time_embedding_half_dim = 128  # must be even
     time_embedding_scale = 1.0
     position_fourier_bands = 8
     t_dist_kw = "uniform"
-    hidden_dim = [512,512]
+    hidden_dim = [512,1024,512]
     output_dim = dim
     # dataset
     if base_ds_kw == "checkerboard":
@@ -174,7 +174,8 @@ def main():
         )
     elif base_ds_kw == "pacman":
         base_ds = Pacman_Dataset(
-            directory="data/pacman.npy"
+            directory="data/pacman.npy",
+            size=50000
         )
     lie_ds = TorusLieWrapper(base_ds)
     angle_ds = AngleTorusWrapper(lie_ds)  # each item: (num_points, 2) in [-pi, pi)
@@ -190,7 +191,8 @@ def main():
         )
     elif base_ds_kw == "pacman":
         val_base_ds = Pacman_Dataset(
-            directory="data/pacman.npy"
+            directory="data/pacman.npy",
+            size=4096
         )
     val_lie_ds = TorusLieWrapper(val_base_ds)
     val_angle_ds = AngleTorusWrapper(val_lie_ds)
@@ -237,8 +239,8 @@ def main():
                 return_time=True,
             )
             pred_score = model(f_t, v_t, t_scalar)  # (B, 2)
-
-            loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
+            loss = weighted_score_loss(pred_score, target_score, t_scalar, total_time)
+            # loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
             
             optimizer.zero_grad(set_to_none=True)
             loss.backward()

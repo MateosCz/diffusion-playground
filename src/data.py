@@ -150,15 +150,19 @@ class Pacman_Dataset(Dataset):
     Pacman maze dataset, uniformly sample from the maze .npy document.
     directory: data/pacman.npy
     """
-    def __init__(self, directory, seed: int| None = None):
+    def __init__(self, directory, size: int | None = None, seed: int| None = None):
         self.directory = directory
         self.data = torch.tensor(np.load(directory)) # (num_points, 2)
         self.data_scale = self._get_data_scale()
         self.data = self._normalize_data(self.data)
         self.seed = seed
+        self.dataset_size = size
     
     def __len__(self):
-        return len(self.data)
+        if self.dataset_size is not None:
+            return self.dataset_size
+        else:
+            return len(self.data)
     
     def __getitem__(self, idx):
         if self.seed is not None:
