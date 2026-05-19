@@ -260,6 +260,8 @@ class TDMDiffusion(BaseDiffusion):
         predictor_corrector_n_steps: int = 1,
         only_correct_vt: bool = False,
         tau: float = 1e-3,
+        vT_prior_scale: float = 1.0,
+        annealing_gamma: float = 1.0,
         debug: bool = False,    
         **kwargs
 
@@ -281,7 +283,7 @@ class TDMDiffusion(BaseDiffusion):
             fT = pos_to_angle(fT)
             fT = wrap_angle(fT)
         if vT_prior_kw == "stdGauss":
-            vT = torch.randn(size=(batch_size, dim), device=device, dtype=dtype)
+            vT = torch.randn(size=(batch_size, dim), device=device, dtype=dtype) * vT_prior_scale
         else:
             vT = torch.rand(size=(batch_size, dim), device=device, dtype=dtype)
         ft_reverse = fT
@@ -314,59 +316,57 @@ class TDMDiffusion(BaseDiffusion):
             else:
                 scorev_reverse = score_learned       
 
-            if i == n_steps-2:
-                # use Tweedie's formula at the last time step
-                ft_reverse, vt_reverse = self._tweedie_step(ft_reverse, vt_reverse, t_reverse, dt, tdm_score_fn)
-            else:
+            # if i == n_steps-2:
+            #     # use Tweedie's formula at the last time step
+            #     ft_reverse, vt_reverse = self._tweedie_step(ft_reverse, vt_reverse, t_reverse, dt, tdm_score_fn)
+            # else:
                  
                 # predictor-corrector sampling strategy
-                if predictor_corrector:
-                    # only using probability flow ODE as predictor step
-                    if exponential_integration:
-                        vt_reverse = (torch.exp(dt) * vt_reverse +
-                                        torch.expm1(dt) * scorev_reverse + 
-                                        torch.sqrt(torch.expm1(2 * dt)) * eps_v)
-                        # r = self.sde.mean_t_coeff(t_reverse_next) / self.sde.mean_t_coeff(t_reverse)
-                        # prefactor_em = (r * self.sde.sigma_t(t_reverse) - self.sde.sigma_t(t_reverse_next)) * self.sde.sigma_t(t_reverse)
-                        # vt_reverse = vt_reverse * r + prefactor_em * scorev_reverse 
-                    else:
-                        vt_reverse = (vt_reverse - 
-                        (-vt_reverse - scorev_reverse) * dt + 
-                        torch.sqrt(2 * dt) * eps_v)
-                
-                
-                # probability flow sampling strategy
-                elif probability_flow:
-                    if exponential_integration:
-                        vt_reverse = (torch.exp(dt) * vt_reverse +
-                                    2 * (torch.expm1(dt)) * scorev_reverse)
-                    else:
-                        vt_reverse = vt_reverse - (-vt_reverse - scorev_reverse) * dt
-                
-                # conventional SDE sampling strategy
+            if predictor_corrector:
+                # only using probability flow ODE as predictor step
+                if exponential_integration:
+                    vt_reverse = (torch.exp(dt) * vt_reverse +
+                                    torch.expm1(dt) * scorev_reverse)
+                    # r = self.sde.mean_t_coeff(t_reverse_next) / self.sde.mean_t_coeff(t_reverse)
+                    # prefactor_em = (r * self.sde.sigma_t(t_reverse) - self.sde.sigma_t(t_reverse_next)) * self.sde.sigma_t(t_reverse)
+                    # vt_reverse = vt_reverse * r + prefactor_em * scorev_reverse 
                 else:
-                    if exponential_integration:
-                        vt_reverse = (torch.exp(dt) * vt_reverse +
-                                    2 * (torch.expm1(dt)) * scorev_reverse + 
-                                    torch.sqrt(torch.expm1(2 * dt)) * eps_v)
-                    else:
-                        vt_reverse = vt_reverse - (-vt_reverse - 2 * scorev_reverse) * dt + torch.sqrt(2 * dt) * eps_v
-                # update ft_reverse to next time step
-                ft_reverse = ft_reverse - dt * vt_reverse
-                ft_reverse = wrap_angle(ft_reverse)
-                
-                # debugging information
-                
-                
-                # corrector step if not one time step before last time step
-                if predictor_corrector:
-                    if i <n_steps-2:
-                        if not only_correct_vt:
-                            for _ in range(predictor_corrector_n_steps):
-                                ft_reverse, vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, tau=tau)
-                        elif only_correct_vt:
-                            for _ in range(predictor_corrector_n_steps):
-                                vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, only_correct_vt=True, tau=tau)
+                    vt_reverse = (vt_reverse - 
+                    (-vt_reverse - scorev_reverse) * dt)
+            
+            
+            # probability flow sampling strategy
+            elif probability_flow:
+                if exponential_integration:
+                    vt_reverse = (torch.exp(dt) * vt_reverse +
+                                2 * (torch.expm1(dt)) * scorev_reverse)
+                else:
+                    vt_reverse = vt_reverse - (-vt_reverse - scorev_reverse) * dt
+            
+            # conventional SDE sampling strategy
+            else:
+                if exponential_integration:
+                    vt_reverse = (torch.exp(dt) * vt_reverse +
+                                2 * (torch.expm1(dt)) * scorev_reverse + 
+                                torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+                else:
+                    vt_reverse = vt_reverse - (-vt_reverse - 2 * scorev_reverse) * dt + torch.sqrt(2 * dt) * eps_v
+            # update ft_reverse to next time step
+            ft_reverse = ft_reverse - dt * vt_reverse
+            ft_reverse = wrap_angle(ft_reverse)
+            
+            # debugging information
+            
+            
+            # corrector step if not one time step before last time step
+            if predictor_corrector:
+                if i <n_steps-2:
+                    if not only_correct_vt:
+                        for _ in range(predictor_corrector_n_steps):
+                            ft_reverse, vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, tau=tau)
+                    elif only_correct_vt:
+                        for _ in range(predictor_corrector_n_steps):
+                            vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, only_correct_vt=True, tau=tau)
             sigma_list.append(float(self.sde.sigma_t(t_reverse_next)[0, 0].detach().cpu()))
             # sample trajectory if needed
             if sample_trajectory:

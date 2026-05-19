@@ -189,6 +189,9 @@ class Pacman_Dataset(Dataset):
         """
         return (data - torch.min(self.data)) / self._get_data_scale()
 
+
+
+
 """
 Lie torus dataset wrapper
 
