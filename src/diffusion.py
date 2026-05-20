@@ -311,7 +311,9 @@ class TDMDiffusion(BaseDiffusion):
                 prefactor = self._get_prefector(t_reverse)
                 sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_reverse))
                 sigma_v = self.sde.sigma_t(t_reverse)
+                # scorev_reverse = score_learned * prefactor * sigma_norm_r_t - vt_reverse / (sigma_v**2)
                 scorev_reverse = score_learned * prefactor * sigma_norm_r_t - vt_reverse / (sigma_v**2)
+
 
             else:
                 scorev_reverse = score_learned       
@@ -339,7 +341,7 @@ class TDMDiffusion(BaseDiffusion):
             elif probability_flow:
                 if exponential_integration:
                     vt_reverse = (torch.exp(dt) * vt_reverse +
-                                2 * (torch.expm1(dt)) * scorev_reverse)
+                                 (torch.expm1(dt)) * scorev_reverse)
                 else:
                     vt_reverse = vt_reverse - (-vt_reverse - scorev_reverse) * dt
             
@@ -361,9 +363,10 @@ class TDMDiffusion(BaseDiffusion):
             # corrector step if not one time step before last time step
             if predictor_corrector:
                 if i <n_steps-2:
+                    corr_step_size = tau * t_reverse_next **2 / self.total_time **2
                     if not only_correct_vt:
                         for _ in range(predictor_corrector_n_steps):
-                            ft_reverse, vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, tau=tau)
+                            ft_reverse, vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, tau=corr_step_size)
                     elif only_correct_vt:
                         for _ in range(predictor_corrector_n_steps):
                             vt_reverse = self._langevin_corrector_step(ft_reverse, vt_reverse, t_reverse_next, dt, tdm_score_fn, only_correct_vt=True, tau=tau)
@@ -419,8 +422,9 @@ class TDMDiffusion(BaseDiffusion):
         # delta = tau / denom * sigma_factor
         delta = tau
         vt_reverse = vt_reverse + delta * scorev_reverse + torch.sqrt(2 * delta) * eps_v
-        ft_reverse = ft_reverse - dt * vt_reverse
+        
         if not only_correct_vt:
+            ft_reverse = ft_reverse - dt * vt_reverse
             ft_reverse = wrap_angle(ft_reverse)
             return ft_reverse, vt_reverse
         else:
