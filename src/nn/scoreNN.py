@@ -1,6 +1,6 @@
 from torch import nn
 import torch
-import src.scoreNNBlock as Block
+import src.nn.scoreNNBlock as Block
 from typing import Sequence, Union
 
 class TDM_SimpleScoreMLP(nn.Module):
