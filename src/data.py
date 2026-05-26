@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import math
-
+from torch_geometric.data import Data, Batch
 """
 data processing helpers
 """
@@ -464,6 +464,99 @@ class AngleTorusWrapper(Dataset):
         angles = torch.atan2(matrices[...,0,1], matrices[...,0,0])
         return angles # (dim,)
 
-"""
-Pac-man data generation
-"""
+class PyGGraphWrapper(Dataset):
+    """
+    Wraps a point-cloud dataset into a PyG graph dataset.
+ 
+    Each sample from the base dataset is (num_points, 2) in [0, 1).
+    This wrapper converts it to a torch_geometric.data.Data with:
+      - data.x:          (N, node_feat_dim) node features (angles + optional Fourier)
+      - data.pos:        (N, 2) raw fractional coordinates
+      - data.edge_index: (2, N*(N-1)) fully-connected edges (no self-loops)
+      - data.edge_attr:  (N*(N-1), edge_feat_dim) pairwise angular differences
+ 
+    Parameters:
+        - base_dataset: any dataset returning (num_points, 2) tensors in [0, 1).
+        - num_points_range: if given as (lo, hi), randomly vary num_points per sample
+          by subsampling. If None, use all points from the base dataset.
+        - use_fourier: if True, node features include [sin(θ1), cos(θ1), sin(θ2), cos(θ2)]
+          in addition to raw angles. Recommended for periodic data.
+        - seed: optional RNG seed for subsampling reproducibility.
+    """
+ 
+    def __init__(
+        self,
+        base_dataset: Dataset,
+        num_points_range: tuple[int, int] | None = None,
+        use_fourier: bool = True,
+        seed: int | None = None,
+    ):
+        self.base = base_dataset
+        self.num_points_range = num_points_range
+        self.use_fourier = use_fourier
+        self.seed = seed
+ 
+    def __len__(self):
+        return len(self.base)
+ 
+    def __getitem__(self, idx):
+        points = self.base[idx]  # (num_points, 2) in [0, 1)
+ 
+        # --- optional: subsample to variable point count ---
+        if self.num_points_range is not None:
+            lo, hi = self.num_points_range
+            if self.seed is not None:
+                gen = torch.Generator().manual_seed(self.seed + idx)
+            else:
+                gen = None
+ 
+            n = torch.randint(lo, hi + 1, (1,), generator=gen).item()
+            n = min(n, points.shape[0])  # can't exceed available points
+ 
+            if gen is not None:
+                perm = torch.randperm(points.shape[0], generator=gen)
+            else:
+                perm = torch.randperm(points.shape[0])
+            points = points[perm[:n]]  # (n, 2)
+ 
+        N = points.shape[0]
+ 
+        # --- node features: convert to periodic angles ---
+        angles = pos_to_angle(points)  # (N, 2) in [-pi, pi)
+ 
+        if self.use_fourier:
+            # [θ1, θ2, sin(θ1), cos(θ1), sin(θ2), cos(θ2)]
+            node_feat = torch.cat([
+                angles,
+                torch.sin(angles),
+                torch.cos(angles),
+            ], dim=-1)  # (N, 6)
+        else:
+            node_feat = angles  # (N, 2)
+ 
+        # --- fully-connected edge_index (no self-loops) ---
+        row = torch.arange(N).repeat_interleave(N - 1)
+        # for each node i, connect to all j != i
+        col_parts = []
+        for i in range(N):
+            col_parts.append(torch.cat([torch.arange(0, i), torch.arange(i + 1, N)]))
+        col = torch.cat(col_parts)
+        edge_index = torch.stack([row, col], dim=0)  # (2, N*(N-1))
+ 
+        # --- edge attributes: pairwise angular differences (wrapped) ---
+        diff = angles[col] - angles[row]  # (E, 2) raw diff
+        # wrap to [-pi, pi)
+        diff = torch.atan2(torch.sin(diff), torch.cos(diff))
+        edge_attr = torch.cat([
+            diff,
+            torch.sin(diff),
+            torch.cos(diff),
+        ], dim=-1)  # (E, 6)
+ 
+        data = Data(
+            x=node_feat,
+            pos=points,
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+        )
+        return data
