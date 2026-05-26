@@ -488,12 +488,12 @@ class PyGGraphWrapper(Dataset):
         self,
         base_dataset: Dataset,
         num_points_range: tuple[int, int] | None = None,
-        use_fourier: bool = True,
+        # use_fourier: bool = False,
         seed: int | None = None,
     ):
         self.base = base_dataset
         self.num_points_range = num_points_range
-        self.use_fourier = use_fourier
+        # self.use_fourier = use_fourier
         self.seed = seed
  
     def __len__(self):
@@ -522,17 +522,17 @@ class PyGGraphWrapper(Dataset):
         N = points.shape[0]
  
         # --- node features: convert to periodic angles ---
-        angles = pos_to_angle(points)  # (N, 2) in [-pi, pi)
+        pos_in_theta = pos_to_angle(points)  # (N, 2) in [-pi, pi)
  
-        if self.use_fourier:
-            # [θ1, θ2, sin(θ1), cos(θ1), sin(θ2), cos(θ2)]
-            node_feat = torch.cat([
-                angles,
-                torch.sin(angles),
-                torch.cos(angles),
-            ], dim=-1)  # (N, 6)
-        else:
-            node_feat = angles  # (N, 2)
+        # if self.use_fourier:
+        #     # [θ1, θ2, sin(θ1), cos(θ1), sin(θ2), cos(θ2)]
+        #     node_feat = torch.cat([
+        #         pos_in_theta,
+        #         torch.sin(pos_in_theta),
+        #         torch.cos(pos_in_theta),
+        #     ], dim=-1)  # (N, 6)
+        # else:
+        node_feat = pos_in_theta  # (N, 2)
  
         # --- fully-connected edge_index (no self-loops) ---
         row = torch.arange(N).repeat_interleave(N - 1)
@@ -544,18 +544,19 @@ class PyGGraphWrapper(Dataset):
         edge_index = torch.stack([row, col], dim=0)  # (2, N*(N-1))
  
         # --- edge attributes: pairwise angular differences (wrapped) ---
-        diff = angles[col] - angles[row]  # (E, 2) raw diff
+        diff = pos_in_theta[col] - pos_in_theta[row]  # (E, 2) raw diff
         # wrap to [-pi, pi)
         diff = torch.atan2(torch.sin(diff), torch.cos(diff))
-        edge_attr = torch.cat([
-            diff,
-            torch.sin(diff),
-            torch.cos(diff),
-        ], dim=-1)  # (E, 6)
+        # edge_attr = torch.cat([
+        #     diff,
+        #     torch.sin(diff),
+        #     torch.cos(diff),
+        # ], dim=-1)  # (E, 6)
+        edge_attr = diff
  
         data = Data(
             x=node_feat,
-            pos=points,
+            pos=pos_in_theta,
             edge_index=edge_index,
             edge_attr=edge_attr,
         )
