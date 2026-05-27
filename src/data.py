@@ -271,10 +271,11 @@ class Shapes_Dataset(Dataset):
     def _unit_circle(num_points: int, generator: torch.Generator = None):
         """Circle of radius 1 centered at origin."""
         if generator is None:
-            t = torch.rand(num_points)
+            jitter = torch.rand(num_points)
         else:
-            t = torch.rand(num_points, generator=generator)
-        t = t.sort().values  # optional: keeps points ordered, nice for viz
+            jitter = torch.rand(num_points, generator=generator)
+        # stratified samples on [0, 1) so small n still covers the full circle
+        t = (torch.arange(num_points, dtype=torch.float32) + jitter) / num_points
         angles = t * 2 * math.pi
         points = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
         return points  # (num_points, 2)
@@ -373,49 +374,64 @@ def _sample_polygon_edges(
     generator: torch.Generator = None,
 ) -> torch.Tensor:
     """
-    Uniformly sample `num_points` on the edges of a closed polygon.
- 
+    Sample `num_points` on the edges of a closed polygon, always including
+    every corner vertex.  The remaining slots are filled with stratified
+    uniform samples along the boundary.  All points are returned sorted by
+    arc-length so they remain in boundary order.
+
     Args:
         vertices: (V, 2) ordered polygon vertices (closed automatically).
-        num_points: number of points to sample.
+        num_points: number of points to sample (must be >= V).
         generator: optional torch RNG.
- 
+
     Returns:
-        (num_points, 2) sampled points.
+        (num_points, 2) points in boundary order.
     """
     V = vertices.shape[0]
-    # edge vectors and lengths
     next_v = torch.roll(vertices, -1, dims=0)
     edge_lengths = torch.norm(next_v - vertices, dim=-1)  # (V,)
     total_length = edge_lengths.sum()
- 
-    # cumulative distribution over edges (proportional to length)
+
     cum_lengths = torch.cumsum(edge_lengths, dim=0)  # (V,)
     cum_probs = cum_lengths / total_length            # (V,)
- 
-    # sample uniform values and assign to edges
-    if generator is None:
-        u = torch.rand(num_points)
+
+    # arc-length parameters of the corner vertices (vertex k sits at the
+    # start of edge k, i.e. just after edge k-1 has ended)
+    vertex_u = torch.cat([torch.zeros(1), cum_probs[:-1]])  # (V,)
+
+    n_extra = max(0, num_points - V)
+
+    if n_extra > 0:
+        # stratified samples on [0, 1) for the non-corner slots
+        if generator is None:
+            jitter = torch.rand(n_extra)
+        else:
+            jitter = torch.rand(n_extra, generator=generator)
+        u_extra = (torch.arange(n_extra, dtype=torch.float32) + jitter) / n_extra
+
+        edge_idx = torch.searchsorted(cum_probs, u_extra).clamp(0, V - 1)
+
+        lower = torch.zeros_like(cum_probs)
+        lower[1:] = cum_probs[:-1]
+        t_local = (
+            (u_extra - lower[edge_idx])
+            / (cum_probs[edge_idx] - lower[edge_idx] + 1e-12)
+        ).unsqueeze(-1)
+
+        p0 = vertices[edge_idx]
+        p1 = next_v[edge_idx]
+        extra_points = p0 + t_local * (p1 - p0)  # (n_extra, 2)
+
+        all_u = torch.cat([vertex_u, u_extra])           # (num_points,)
+        all_points = torch.cat([vertices, extra_points])  # (num_points, 2)
     else:
-        u = torch.rand(num_points, generator=generator)
-    u = u.sort().values
- 
-    # find which edge each sample falls on
-    edge_idx = torch.searchsorted(cum_probs, u)  # (num_points,)
-    edge_idx = edge_idx.clamp(0, V - 1)
- 
-    # local parameter t along each edge
-    lower = torch.zeros_like(cum_probs)
-    lower[1:] = cum_probs[:-1]
-    t_local = (u - lower[edge_idx]) / (cum_probs[edge_idx] - lower[edge_idx] + 1e-12)
-    t_local = t_local.unsqueeze(-1)  # (num_points, 1)
- 
-    # interpolate
-    p0 = vertices[edge_idx]       # (num_points, 2)
-    p1 = next_v[edge_idx]         # (num_points, 2)
-    points = p0 + t_local * (p1 - p0)
- 
-    return points  # (num_points, 2)
+        # fewer requested points than corners — return the first num_points vertices
+        all_u = vertex_u[:num_points]
+        all_points = vertices[:num_points]
+
+    # sort by arc-length to keep boundary order
+    sort_idx = torch.argsort(all_u)
+    return all_points[sort_idx]  # (num_points, 2)
 
 """
 Lie torus dataset wrapper
@@ -513,11 +529,18 @@ class PyGGraphWrapper(Dataset):
             n = torch.randint(lo, hi + 1, (1,), generator=gen).item()
             n = min(n, points.shape[0])  # can't exceed available points
  
+            # base points are ordered along the shape boundary; subsample
+            # stratified indices so a small n still spans the whole shape
             if gen is not None:
-                perm = torch.randperm(points.shape[0], generator=gen)
+                jitter = torch.rand(n, generator=gen)
             else:
-                perm = torch.randperm(points.shape[0])
-            points = points[perm[:n]]  # (n, 2)
+                jitter = torch.rand(n)
+            idx = (
+                (torch.arange(n, dtype=torch.float32) + jitter)
+                / n
+                * points.shape[0]
+            ).long().clamp(0, points.shape[0] - 1)
+            points = points[idx]  # (n, 2)
  
         N = points.shape[0]
  
@@ -546,7 +569,7 @@ class PyGGraphWrapper(Dataset):
         # --- edge attributes: pairwise angular differences (wrapped) ---
         diff = pos_in_theta[col] - pos_in_theta[row]  # (E, 2) raw diff
         # wrap to [-pi, pi)
-        diff = torch.atan2(torch.sin(diff), torch.cos(diff))
+        # diff = torch.atan2(torch.sin(diff), torch.cos(diff))
         # edge_attr = torch.cat([
         #     diff,
         #     torch.sin(diff),
