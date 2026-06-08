@@ -126,6 +126,9 @@ class TDM_VanillaGNN(nn.Module):
         output_dim: int = 2,
         total_time: float = 2.0,
         time_embedding_scale: float = 1.0,
+        with_sincos_position: bool = True,
+        only_sincos_position: bool = True,
+        position_fourier_bands: int = 8,
         **kwargs,
     ):
         super().__init__()
@@ -135,18 +138,29 @@ class TDM_VanillaGNN(nn.Module):
         self.time_embedding_scale = time_embedding_scale
         self.time_embedding_half_dim = time_embedding_half_dim
         self.time_embedding_dim = 2 * time_embedding_half_dim
-
+        self.with_sincos_position = with_sincos_position
+        self.only_sincos_position = only_sincos_position
         # Build list of hidden widths
         if isinstance(hidden_dim, int):
             self.hidden_dims = [hidden_dim] * num_mp_layers
         else:
             self.hidden_dims = list(hidden_dim)
+        self.v_dim = v_dim
+        self.position_fourier_bands = position_fourier_bands
+        self.node_feat_dim = node_feat_dim
 
-        node_input_dim = node_feat_dim + v_dim  # concatenate node features + velocity
+        if self.with_sincos_position:
+            sincos_dim = self.node_feat_dim * 2 * self.position_fourier_bands
+            if self.only_sincos_position:
+                self.node_input_dim = sincos_dim
+            else:
+                self.node_input_dim = self.node_feat_dim + sincos_dim
+
+        self.node_input_dim = self.node_input_dim + self.v_dim  # concatenate node features + velocity
 
         # --- Lifting layers (same pattern as MLP) ---
         self.lifting_layer_x = nn.Sequential(
-            nn.Linear(node_input_dim, self.hidden_dims[0]),
+            nn.Linear(self.node_input_dim, self.hidden_dims[0]),
             nn.SiLU(),
             nn.Linear(self.hidden_dims[0], self.hidden_dims[0]),
         )
@@ -210,7 +224,28 @@ class TDM_VanillaGNN(nn.Module):
         h_t = h_t_graph[batch]                                # (N_total, time_emb_dim)
 
         # --- Node lifting ---
-        h = self.lifting_layer_x(torch.cat([x, vt], dim=-1))  # (N_total, hidden_dims[0])
+
+        if self.with_sincos_position:
+            frequencies = torch.arange(
+                1,
+                self.position_fourier_bands + 1,
+                device=x.device,
+                dtype=x.dtype,
+            )
+            x_freq = x.unsqueeze(-1) * frequencies
+            sincos_x = torch.cat(
+                [
+                    torch.sin(x_freq).flatten(start_dim=-2),
+                    torch.cos(x_freq).flatten(start_dim=-2),
+                ],
+                dim=-1,
+            )
+            if self.only_sincos_position:
+                x = sincos_x
+            else:
+                x = torch.cat([x, sincos_x], dim=-1)
+        x = torch.cat([x, vt], dim=-1)
+        h = self.lifting_layer_x(x)  # (N_total, hidden_dims[0])
         h = self.input_norm(h)
 
         # --- Message passing ---
