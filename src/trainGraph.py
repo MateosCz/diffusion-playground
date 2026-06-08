@@ -15,6 +15,15 @@ def time_loss_weight(t, total_time):
 
 
 def weighted_score_loss(pred_score, target_score, t, total_time):
+    '''
+    Parameters:
+        pred_score: (N_total, 2)
+        target_score: (N_total, 2)
+        t: (N_total, 1)
+        total_time: float
+    Returns:
+        loss: scalar
+    '''
     weight = time_loss_weight(t, total_time)
     while weight.ndim < pred_score.ndim:
         weight = weight.unsqueeze(-1)
@@ -67,17 +76,18 @@ def evaluate_score_model(model, diffusion, loader, device, total_time, max_batch
     n_batches = 0
 
     for batch in loader:
-        batch = batch.to(device, dtype=torch.float32)
-        (v_t, f_t), target_score, t_scalar = diffusion.sample_forward_graph(
+        batch = batch.to(device)
+        (v_t, batch_graph_noised), target_score, t_scalar = diffusion.sample_forward_graph(
             graph=batch,
             total_time=total_time,
             t_dist_kw="uniform",
             v0_dist_kw="zero",
             return_time=True,
         )
-        pred_score = model.forward_from_data(batch, v_t, t_scalar) # (N_total, 2)
-        loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
-        diagnostics = score_diagnostics(pred_score, target_score, t_scalar, total_time)
+        pred_score = model.forward_from_data(batch_graph_noised, v_t, t_scalar) # (N_total, 2)
+        t_all = t_scalar[batch.batch] # (N_total,)
+        loss = weighted_score_loss(pred_score, target_score, t_all, total_time)
+        diagnostics = score_diagnostics(pred_score, target_score, t_all, total_time)
 
         total_loss += loss.item()
         total_cosine += diagnostics["cosine"]
@@ -118,11 +128,11 @@ def evaluate_score_model_fixed_times(
 ):
     was_training = model.training
     model.eval()
-    batch = next(iter(loader)).to(device, dtype=torch.float32)
+    batch = next(iter(loader)).to(device)
     summaries = []
 
     for fixed_t in fixed_times:
-        (v_t, f_t), target_score, t_scalar = diffusion.sample_forward_graph(
+        (v_t, batch_graph_noised), target_score, t_scalar = diffusion.sample_forward_graph(
             graph=batch,
             total_time=total_time,
             t_dist_kw="constant",
@@ -130,8 +140,9 @@ def evaluate_score_model_fixed_times(
             v0_dist_kw="zero",
             return_time=True,
         )
-        pred_score = model.forward_from_data(batch, v_t, t_scalar) # (N_total, 2)
-        diagnostics = score_diagnostics(pred_score, target_score, t_scalar, total_time)
+        pred_score = model.forward_from_data(batch_graph_noised, v_t, t_scalar) # (N_total, 2)
+        t_all = t_scalar[batch.batch] # (N_total,)
+        diagnostics = score_diagnostics(pred_score, target_score, t_all, total_time)
         summaries.append(
             f"t={fixed_t:.1f}:imp={diagnostics['improvement']:.3f},"
             f"cos={diagnostics['cosine']:.3f},std={diagnostics['pred_std']:.3f}"
@@ -149,7 +160,7 @@ def main():
     # Config (simple defaults)
     # -----------------------
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    batch_size = 512
+    batch_size = 32
     n_epoch = 200
     lr = 1e-3
     total_time = 2.0
@@ -174,7 +185,7 @@ def main():
     if base_ds_kw == "shapes":
         base_ds = Shapes_Dataset(
             num_points=32,
-            dataset_size=50000,
+            dataset_size=10000,
             shape_types=["triangle"]
         )
         graph_ds = PyGGraphWrapper(base_ds, num_points_range=(26,32))
@@ -208,22 +219,24 @@ def main():
         running_loss = 0.0
 
         pbar = tqdm(loader, desc=f"Epoch {epoch}/{n_epoch}", leave=False)
-        for batch_idx, batch in enumerate(pbar, start=1):
-            # f0: (B, 2)
-            batch = batch.to(device, dtype=torch.float32)
+        for batch_idx, batch_graph in enumerate(pbar, start=1):
+            # batch: (N_total)
+            batch_graph = batch_graph.to(device)
             # sample noised state + target score
             # latents = (v_t, f_t), each (N_total, 2)
             # t_scalar: (num_graphs, 1)
-            (v_t, f_t), target_score, t_scalar = diffusion.sample_forward_graph(
-                graph=batch,
+            (v_t, batch_graph_noised), target_score, t_scalar = diffusion.sample_forward_graph(
+                graph=batch_graph,
                 total_time=total_time,
                 t_dist_kw=t_dist_kw,
                 v0_dist_kw="zero",
                 return_time=True,
             )
-            pred_score = model.forward_from_data(batch, v_t, t_scalar) # (N_total, 2)
+            pred_score = model.forward_from_data(batch_graph_noised, v_t, t_scalar) # (N_total, 2)
 
-            loss = diffusion.loss_diffusion(pred_score, target_score, t_scalar)
+            t_all = t_scalar[batch_graph.batch] # (N_total,)
+
+            loss = weighted_score_loss(pred_score, target_score, t_all, total_time)
             
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -231,7 +244,7 @@ def main():
             optimizer.step()
             
             running_loss += loss.item()
-            diagnostics = score_diagnostics(pred_score.detach(), target_score.detach(), t_scalar, total_time)
+            diagnostics = score_diagnostics(pred_score.detach(), target_score.detach(), t_all, total_time)
             pbar.set_postfix(
                 batch=f"{batch_idx}/{len(loader)}",
                 loss=f"{loss.item():.4f}",

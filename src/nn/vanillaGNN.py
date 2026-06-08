@@ -172,6 +172,7 @@ class TDM_VanillaGNN(nn.Module):
         )
 
         self.input_norm = nn.LayerNorm(self.hidden_dims[0])
+        self.time_embedding_layer = Block.SinusoidalTimeEmbedding(self.time_embedding_half_dim)
 
         # --- Message-passing layers ---
         self.mp_layers = nn.ModuleList()
@@ -216,9 +217,8 @@ class TDM_VanillaGNN(nn.Module):
         """
         # --- Time embedding (per-graph, then expand to per-node) ---
         t_norm = t / self.total_time                          # (B, 1)
-        t_emb = Block.sinusoidal_time_embedding(
-            t_norm.squeeze(-1) * self.time_embedding_scale,
-            self.time_embedding_half_dim,
+        t_emb = self.time_embedding_layer(
+            t_norm * self.time_embedding_scale
         )                                                     # (B, time_emb_dim)
         h_t_graph = self.lifting_layer_t(t_emb)               # (B, time_emb_dim)
         h_t = h_t_graph[batch]                                # (N_total, time_emb_dim)
