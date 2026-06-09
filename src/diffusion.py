@@ -11,7 +11,9 @@ from src.data import pos_to_angle, wrap_angle, wrap_pos
 from src.distribution import WrappedNormalDistribution, sigma_norm
 import math
 from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch_geometric.utils import scatter
+from src.data import make_random_graph
 
 
 
@@ -596,8 +598,10 @@ class TDMDiffusion(BaseDiffusion):
     @torch.inference_mode()
     def sample_backward_graph(
         self,
-        graph_T: Data,
-        vT: torch.Tensor,
+        fT_prior_kw: Literal["stdGauss", "uniform"],
+        vT_prior_kw: torch.Tensor,
+        graph_nodes: Tuple,
+        data_dim: int,
         total_time: float,
         tdm_score_fn: Callable[[Data, torch.Tensor, torch.Tensor], torch.Tensor],
         n_steps: int = 100,
@@ -608,8 +612,10 @@ class TDMDiffusion(BaseDiffusion):
         predictor_corrector_n_steps: int = 1,
         only_correct_vt: bool = False,
         tau: float = 1e-3,
+        vT_prior_scale: float = 1.0,
         annealing_gamma: float = 1.0,
         debug: bool = False,
+        **kwargs
     ):
         """
         Graph-structured reverse (denoising) process for sampling.
@@ -648,6 +654,25 @@ class TDMDiffusion(BaseDiffusion):
         (ft_traj, vt_traj, t_arr)                          sample_trajectory=True
         (ft_traj, vt_traj, t_arr, sigma_arr)               debug=True
         """
+
+        assert fT_prior_kw in ["stdGauss", "uniform"]
+        assert vT_prior_kw in ["stdGauss", "uniform"]
+        device, dtype = torch.device("cpu"), torch.float32
+
+        graph_list = [make_random_graph(num_nodes, data_dim, scale_range=(-torch.pi, torch.pi)) for num_nodes in graph_nodes]
+        total_nodes = sum(num_nodes for num_nodes in graph_nodes)
+        loader = PyGDataLoader(graph_list, batch_size=len(graph_nodes), shuffle=False)
+        graph_T = next(iter(loader))
+
+        if vT_prior_kw == "stdGauss":
+            vT = torch.randn(size=(total_nodes, data_dim), device=device, dtype=dtype) * vT_prior_scale
+        else:
+            vT = torch.rand(size=(total_nodes, data_dim), device=device, dtype=dtype)
+
+        
+
+        
+
         device = graph_T.x.device
         dtype = graph_T.x.dtype
         batch_vec = graph_T.batch                           # (N_total,)
@@ -728,6 +753,7 @@ class TDMDiffusion(BaseDiffusion):
                             tdm_score_fn, tau=float(corr_step_size.mean().item()),
                             only_correct_vt=True,
                         )
+
 
             sigma_list.append(float(self.sde.sigma_t(t_g_next)[0, 0].item()))
             t_list.append(float(t_g_next[0, 0].item()))

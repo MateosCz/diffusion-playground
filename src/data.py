@@ -3,6 +3,7 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import math
 from torch_geometric.data import Data, Batch
+from typing import Literal
 """
 data processing helpers
 """
@@ -616,3 +617,32 @@ class PyGGraphWrapper(Dataset):
             corner_mask=corner_mask,
         )
         return data
+
+def make_random_graph(num_nodes, dim, self_loops=False, scale_range: tuple[float, float] = (-torch.pi, torch.pi), distribution_kw: Literal["uniform", "normal"] = "uniform", seed: int | None = None):
+    # x and pos are the same, sampled uniformly in [0, 1)
+    if seed is not None:
+        generator = torch.Generator().manual_seed(seed)
+    else:
+        generator = None
+    if distribution_kw == "uniform":
+        pos = torch.rand(num_nodes, dim, generator=generator) * (scale_range[1] - scale_range[0]) + scale_range[0]
+    elif distribution_kw == "normal":
+        pos = torch.randn(num_nodes, dim, generator=generator) * (scale_range[1] - scale_range[0]) + scale_range[0]
+    else:
+        raise ValueError(f"Unknown distribution_kw: {distribution_kw}")
+    pos = pos * (scale_range[1] - scale_range[0]) + scale_range[0]
+    x = pos.clone()                       # x == pos
+
+    # fully connected edge_index: all (i, j) pairs
+    row = torch.arange(num_nodes).repeat_interleave(num_nodes)  # 0,0,0,1,1,1,...
+    col = torch.arange(num_nodes).repeat(num_nodes)             # 0,1,2,0,1,2,...
+    if not self_loops:
+        mask = row != col                 # drop i == j  -> N*(N-1) edges
+        row, col = row[mask], col[mask]
+    edge_index = torch.stack([row, col], dim=0)                 # [2, E]
+
+    # edge attr = difference of positions (relative vector)
+    # PyG convention: edge_index[0]=source, edge_index[1]=target
+    edge_attr = pos[edge_index[1]] - pos[edge_index[0]]         # pos_dst - pos_src
+
+    return Data(x=x, pos=pos, edge_index=edge_index, edge_attr=edge_attr)
