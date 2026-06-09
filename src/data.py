@@ -630,7 +630,6 @@ def make_random_graph(num_nodes, dim, self_loops=False, scale_range: tuple[float
         pos = torch.randn(num_nodes, dim, generator=generator) * (scale_range[1] - scale_range[0]) + scale_range[0]
     else:
         raise ValueError(f"Unknown distribution_kw: {distribution_kw}")
-    pos = pos * (scale_range[1] - scale_range[0]) + scale_range[0]
     x = pos.clone()                       # x == pos
 
     # fully connected edge_index: all (i, j) pairs

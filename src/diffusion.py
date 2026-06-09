@@ -615,6 +615,7 @@ class TDMDiffusion(BaseDiffusion):
         vT_prior_scale: float = 1.0,
         annealing_gamma: float = 1.0,
         debug: bool = False,
+        seed: Optional[int] = None,
         **kwargs
     ):
         """
@@ -658,16 +659,20 @@ class TDMDiffusion(BaseDiffusion):
         assert fT_prior_kw in ["stdGauss", "uniform"]
         assert vT_prior_kw in ["stdGauss", "uniform"]
         device, dtype = torch.device("cpu"), torch.float32
+        if seed is not None:
+            generator = torch.Generator().manual_seed(seed)
+        else:
+            generator = None
 
-        graph_list = [make_random_graph(num_nodes, data_dim, scale_range=(-torch.pi, torch.pi)) for num_nodes in graph_nodes]
+        graph_list = [make_random_graph(num_nodes, data_dim, scale_range=(-torch.pi, torch.pi), seed=seed) for num_nodes in graph_nodes]
         total_nodes = sum(num_nodes for num_nodes in graph_nodes)
         loader = PyGDataLoader(graph_list, batch_size=len(graph_nodes), shuffle=False)
         graph_T = next(iter(loader))
 
         if vT_prior_kw == "stdGauss":
-            vT = torch.randn(size=(total_nodes, data_dim), device=device, dtype=dtype) * vT_prior_scale
+            vT = torch.randn(size=(total_nodes, data_dim), device=device, dtype=dtype, generator=generator) * vT_prior_scale
         else:
-            vT = torch.rand(size=(total_nodes, data_dim), device=device, dtype=dtype)
+            vT = torch.rand(size=(total_nodes, data_dim), device=device, dtype=dtype, generator=generator)
 
         
 
