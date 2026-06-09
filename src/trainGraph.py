@@ -164,7 +164,9 @@ def main():
     n_epoch = 200
     lr = 1e-3
     total_time = 2.0
-    base_ds_kw = "shapes"
+    base_ds_kw = "triangle"
+    base_ds_kw = "mix"
+
     num_mp_layers = 3
     node_feat_dim = 2
     edge_feat_dim = 2
@@ -182,14 +184,20 @@ def main():
     hidden_dim = [512,512]
     output_dim = dim
     # dataset
-    if base_ds_kw == "shapes":
+    if base_ds_kw == "triangle":
         base_ds = Shapes_Dataset(
             num_points=32,
             dataset_size=10000,
             shape_types=["triangle"]
         )
-        graph_ds = PyGGraphWrapper(base_ds, num_points_range=(26,32))
-        loader = PyGDataLoader(graph_ds, batch_size=batch_size, shuffle=True)
+    elif base_ds_kw == "mix":
+        base_ds = Shapes_Dataset(
+            num_points=32,
+            dataset_size=10000,
+            shape_types=["triangle", "rectangle", "circle", "star"]
+        )
+    graph_ds = PyGGraphWrapper(base_ds, num_points_range=(26,32))
+    loader = PyGDataLoader(graph_ds, batch_size=batch_size, shuffle=True)
     val_graph_ds = PyGGraphWrapper(base_ds, num_points_range=(26,32))
     val_loader = PyGDataLoader(val_graph_ds, batch_size=batch_size, shuffle=False)
     # diffusion + score model
@@ -288,10 +296,10 @@ def main():
     plt.title("Training Loss")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"training_loss_{base_ds_kw}.png", dpi=150)
+    plt.savefig(f"training_loss_{base_ds_kw}_shapes.png", dpi=150)
     plt.show()
     # save model
-    torch.save(model.state_dict(), f"simple_score_mlp_{base_ds_kw}.pt")
-    print(f"Training done. Saved model to simple_score_mlp_{base_ds_kw}.pt")
+    torch.save(model.state_dict(), f"vanilla_gnn_{base_ds_kw}_shapes.pt")
+    print(f"Training done. Saved model to vanilla_gnn_{base_ds_kw}_shapes.pt")
 if __name__ == "__main__":
     main()
