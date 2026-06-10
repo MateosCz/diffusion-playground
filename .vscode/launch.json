@@ -18,6 +18,14 @@
             "module": "src.train",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug trainGraph.py (as module)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.trainGraph",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

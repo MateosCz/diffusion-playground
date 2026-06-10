@@ -10,6 +10,10 @@ from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSc
 from src.data import pos_to_angle, wrap_angle, wrap_pos
 from src.distribution import WrappedNormalDistribution, sigma_norm
 import math
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader as PyGDataLoader
+from torch_geometric.utils import scatter
+from src.data import make_random_graph
 
 
 
@@ -463,11 +467,6 @@ class TDMDiffusion(BaseDiffusion):
         # f0 = ft_reverse
         return f0, v0
 
-
-
-
-
-
     #Eq(19) in KLDM paper, v0 is 0
     def _get_scorev_from_scoreall(self, scoreall, vt, t): 
         scorev = self._get_prefector(t) * scoreall - vt/(self.sde.sigma_t(t)**2) # only for v0 = 0
@@ -486,4 +485,337 @@ class TDMDiffusion(BaseDiffusion):
     def _sigma_norm_t(self, t: torch.Tensor):
         idx = torch.round(t / self.total_time * (len(self.sigma_norms_r))).long() - 1
         return self.sigma_norms_r[idx]
+    
+
+    # ------------------------------------------------------------------
+    # Graph-aware forward / backward sampling
+    # ------------------------------------------------------------------
+
+    def sample_forward_graph(
+        self,
+        graph: Data,
+        total_time: float,
+        t_dist_kw: Literal["uniform", "quadratic", "constant"] = "uniform",
+        v0_dist_kw: Literal["stdGauss", "zero"] = "zero",
+        constant_t: float = 1.0,
+        return_time: bool = False,
+        t_min: float = 5e-3,
+    ):
+        """
+        Graph-structured forward (noising) process for training.
+
+        Accepts a PyG Batch produced by PyGGraphWrapper (or a DataLoader over
+        it).  One diffusion time is sampled per graph and shared across all
+        nodes of that graph; the actual noising arithmetic mirrors
+        ``sample_forward`` exactly.
+
+        Parameters
+        ----------
+        graph : torch_geometric.data.Data / Batch
+            Must have ``graph.x`` (N_total, 2) node angles in [-pi, pi),
+            ``graph.batch`` (N_total,) graph-membership indices, and valid
+            ``graph.edge_index`` / ``graph.edge_attr``.
+        total_time : float
+        t_dist_kw : "uniform" | "quadratic" | "constant"
+        v0_dist_kw : "stdGauss" | "zero"
+        constant_t : float
+            Used only when t_dist_kw == "constant".
+        return_time : bool
+            When True also return ``ts`` of shape (num_graphs, 1).
+        t_min : float
+
+        Returns
+        -------
+        (vts, noised_graph), score          when return_time=False
+        (vts, noised_graph), score, ts      when return_time=True
+
+        vts         : (N_total, 2)  velocity at each node
+        noised_graph: graph with .x / .pos / .edge_attr updated to f_t
+        score       : (N_total, 2)  target score at each node
+        ts          : (num_graphs, 1)
+        """
+        device = graph.x.device
+        dtype = graph.x.dtype
+        batch_vec = graph.batch          # (N_total,)
+        num_graphs = int(batch_vec.max().item()) + 1
+        f0 = graph.x                     # (N_total, 2)
+
+        # --- one time per graph, then expand to per-node ---
+        if t_dist_kw == "uniform":
+            ts = torch.rand(size=(num_graphs, 1), device=device, dtype=dtype)
+            ts = ts * (total_time - t_min) + t_min
+        elif t_dist_kw == "quadratic":
+            ts = torch.rand(size=(num_graphs, 1), device=device, dtype=dtype) ** 2
+            ts = ts * (total_time - t_min) + t_min
+        elif t_dist_kw == "constant":
+            ts = constant_t * torch.ones(size=(num_graphs, 1), device=device, dtype=dtype)
+        else:
+            raise ValueError(f"Unknown t_dist_kw: {t_dist_kw}")
+
+        ts_node = ts[batch_vec]          # (N_total, 1) time per node, each sample share a same time
+
+        # --- initial velocity ---
+        if v0_dist_kw == "zero":
+            v0s = torch.zeros_like(f0)
+        else:
+            v0s = torch.randn_like(f0)
+
+        # --- velocity forward process ---
+        mu_vt = self.sde.mean_t_coeff(ts_node) * v0s
+        sigma_vt = self.sde.sigma_t(ts_node)
+        epsv = torch.randn_like(v0s)
+        vts = epsv * sigma_vt + mu_vt
+
+        if v0_dist_kw == "zero":
+            scorev = -vts / (sigma_vt ** 2)
+        else:
+            scorev = -epsv / sigma_vt
+
+        # --- position forward process ---
+        wrapped_rts = self._sample_r_given_v(vts, v0s, ts_node)
+        fts = wrap_angle(f0 + wrapped_rts)
+
+        # --- target score ---
+        if self.simplified_param:
+            scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=False)
+            sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(ts_node))
+            score = scorec / sigma_norm_r_t
+        else:
+            scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=True)
+            score = scorec + scorev
+
+        # --- refresh graph with noised positions ---
+        # noised_graph = self._update_graph_batch(graph, fts)
+        noised_graph = graph.clone()
+        noised_graph = self._update_graph_batch(noised_graph, fts)
+
+
+
+        if return_time:
+            return (vts, noised_graph), score, ts
+        return (vts, noised_graph), score
+
+    @torch.inference_mode()
+    def sample_backward_graph(
+        self,
+        fT_prior_kw: Literal["stdGauss", "uniform"],
+        vT_prior_kw: torch.Tensor,
+        graph_nodes: Tuple,
+        data_dim: int,
+        total_time: float,
+        tdm_score_fn: Callable[[Data, torch.Tensor, torch.Tensor], torch.Tensor],
+        n_steps: int = 100,
+        sample_trajectory: bool = False,
+        exponential_integration: bool = True,
+        probability_flow: bool = False,
+        predictor_corrector: bool = False,
+        predictor_corrector_n_steps: int = 1,
+        only_correct_vt: bool = False,
+        tau: float = 1e-3,
+        vT_prior_scale: float = 1.0,
+        annealing_gamma: float = 1.0,
+        debug: bool = False,
+        seed: Optional[int] = None,
+        **kwargs
+    ):
+        """
+        Graph-structured reverse (denoising) process for sampling.
+
+        Mirrors ``sample_backward`` exactly but operates on node-level
+        tensors so that the score network can exploit the graph structure
+        at every step.
+
+        Parameters
+        ----------
+        graph_T : torch_geometric.data.Data / Batch
+            Graph batch whose ``.x`` / ``.pos`` are already set to the
+            prior samples ``f_T`` (angles in [-pi, pi)).  Must also carry
+            ``graph_T.batch`` and valid ``edge_index`` / ``edge_attr``.
+        vT : (N_total, 2)
+            Prior velocity at each node.
+        total_time : float
+        tdm_score_fn : callable  (graph, vt, t) -> (N_total, 2)
+            Score network wrapper.  ``graph`` is the *updated* PyG Batch
+            at the current reverse time step; ``vt`` is (N_total, 2); ``t``
+            is (num_graphs, 1).
+        n_steps : int
+        sample_trajectory : bool
+        exponential_integration : bool
+        probability_flow : bool
+        predictor_corrector : bool
+        predictor_corrector_n_steps : int
+        only_correct_vt : bool
+        tau : float
+        annealing_gamma : float
+        debug : bool
+
+        Returns
+        -------
+        (ft_reverse, vt_reverse)                           default
+        (ft_traj, vt_traj, t_arr)                          sample_trajectory=True
+        (ft_traj, vt_traj, t_arr, sigma_arr)               debug=True
+        """
+
+        assert fT_prior_kw in ["stdGauss", "uniform"]
+        assert vT_prior_kw in ["stdGauss", "uniform"]
+        device, dtype = torch.device("cpu"), torch.float32
+        if seed is not None:
+            generator = torch.Generator().manual_seed(seed)
+        else:
+            generator = None
+
+        graph_list = [make_random_graph(num_nodes, data_dim, scale_range=(-torch.pi, torch.pi), seed=seed) for num_nodes in graph_nodes]
+        total_nodes = sum(num_nodes for num_nodes in graph_nodes)
+        loader = PyGDataLoader(graph_list, batch_size=len(graph_nodes), shuffle=False)
+        graph_T = next(iter(loader))
+
+        if vT_prior_kw == "stdGauss":
+            vT = torch.randn(size=(total_nodes, data_dim), device=device, dtype=dtype, generator=generator) * vT_prior_scale
+        else:
+            vT = torch.rand(size=(total_nodes, data_dim), device=device, dtype=dtype, generator=generator)
+
         
+
+        
+
+        device = graph_T.x.device
+        dtype = graph_T.x.dtype
+        batch_vec = graph_T.batch                           # (N_total,)
+        num_graphs = int(batch_vec.max().item()) + 1
+
+        dt_scalar = total_time / (n_steps - 1)
+        dt = torch.tensor(dt_scalar, device=device, dtype=dtype)
+
+        ft_reverse = graph_T.x.clone()                     # (N_total, 2)
+        vt_reverse = vT.clone()                            # (N_total, 2)
+        graph = graph_T                                     # mutable reference
+
+        ft_traj, vt_traj, t_list, sigma_list = [], [], [], []
+        if sample_trajectory:
+            ft_traj.append(ft_reverse.cpu())
+            vt_traj.append(vt_reverse.cpu())
+
+        t_reverse_list = torch.linspace(total_time, 0, n_steps, device=device, dtype=dtype)
+        # shape: (num_graphs, n_steps, 1) — same time for all graphs at each step
+        t_reverse_list = t_reverse_list.unsqueeze(0).unsqueeze(-1).expand(num_graphs, -1, -1)
+        t_list.append(float(t_reverse_list[0, 0, 0].item()))
+        sigma_list.append(float(self.sde.sigma_t(t_reverse_list[:, 0])[0, 0].item()))
+
+        for i in range(n_steps - 1):
+            # per-graph time: (num_graphs, 1)
+            t_g = t_reverse_list[:, i, :]       # (num_graphs, 1)
+            t_g_next = t_reverse_list[:, i + 1, :]
+
+            # per-node time: (N_total, 1)
+            t_n = t_g[batch_vec]
+
+            score_learned = tdm_score_fn(graph, vt_reverse, t_g)   # (N_total, 2)
+            eps_v = torch.randn_like(vt_reverse)
+
+            if self.simplified_param:
+                prefactor = self._get_prefector(t_n)                # (N_total, 1)
+                sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_n))
+                sigma_v = self.sde.sigma_t(t_n)
+                scorev_reverse = (score_learned * prefactor * sigma_norm_r_t
+                                  - vt_reverse / (sigma_v ** 2))
+            else:
+                scorev_reverse = score_learned
+
+            # --- velocity update ---
+            if predictor_corrector or probability_flow:
+                if exponential_integration:
+                    vt_reverse = (torch.exp(dt) * vt_reverse
+                                  + torch.expm1(dt) * scorev_reverse)
+                else:
+                    vt_reverse = vt_reverse - (-vt_reverse - scorev_reverse) * dt
+            else:
+                if exponential_integration:
+                    vt_reverse = (torch.exp(dt) * vt_reverse
+                                  + 2 * torch.expm1(dt) * scorev_reverse
+                                  + torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+                else:
+                    vt_reverse = (vt_reverse
+                                  - (-vt_reverse - 2 * scorev_reverse) * dt
+                                  + torch.sqrt(2 * dt) * eps_v)
+
+            # --- position update and graph refresh ---
+            ft_reverse = wrap_angle(ft_reverse - dt * vt_reverse)
+            graph = self._update_graph_batch(graph, ft_reverse)
+
+            # --- corrector ---
+            if predictor_corrector and i < n_steps - 2:
+                corr_step_size = tau * t_g_next ** 2 / self.total_time ** 2  # (num_graphs,1)
+                for _ in range(predictor_corrector_n_steps):
+                    if not only_correct_vt:
+                        ft_reverse, vt_reverse = self._langevin_corrector_step_graph(
+                            graph, vt_reverse, t_g, batch_vec, dt,
+                            tdm_score_fn, tau=float(corr_step_size.mean().item()),
+                        )
+                        graph = self._update_graph_batch(graph, ft_reverse)
+                    else:
+                        vt_reverse = self._langevin_corrector_step_graph(
+                            graph, vt_reverse, t_g, batch_vec, dt,
+                            tdm_score_fn, tau=float(corr_step_size.mean().item()),
+                            only_correct_vt=True,
+                        )
+
+
+            sigma_list.append(float(self.sde.sigma_t(t_g_next)[0, 0].item()))
+            t_list.append(float(t_g_next[0, 0].item()))
+            if sample_trajectory:
+                ft_traj.append(ft_reverse.cpu())
+                vt_traj.append(vt_reverse.cpu())
+
+        t_arr = torch.tensor(t_list).numpy()
+        sigma_arr = torch.tensor(sigma_list).numpy()
+
+        if debug:
+            return ft_traj, vt_traj, t_arr, sigma_arr
+        if sample_trajectory:
+            return ft_traj, vt_traj, t_arr
+        return ft_reverse, vt_reverse
+
+    def _langevin_corrector_step_graph(
+        self,
+        graph: Data,
+        vt_reverse: torch.Tensor,
+        t_g: torch.Tensor,
+        batch_vec: torch.Tensor,
+        dt: torch.Tensor,
+        score_fn: Callable[[Data, torch.Tensor, torch.Tensor], torch.Tensor],
+        tau: float = 0.25,
+        only_correct_vt: bool = False,
+    ):
+        """Langevin corrector step operating on node-level tensors."""
+        t_n = t_g[batch_vec]                                       # (N_total, 1)
+        score_learned = score_fn(graph, vt_reverse, t_g)           # (N_total, 2)
+        tau_t = torch.tensor(tau, device=vt_reverse.device, dtype=vt_reverse.dtype)
+        eps_v = torch.randn_like(vt_reverse)
+        prefactor = self._get_prefector(t_n)
+        sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_n))
+        sigma_v = self.sde.sigma_t(t_n)
+        scorev_reverse = (score_learned * prefactor * sigma_norm_r_t
+                          - vt_reverse / (sigma_v ** 2))
+        vt_reverse = vt_reverse + tau_t * scorev_reverse + torch.sqrt(2 * tau_t) * eps_v
+        if not only_correct_vt:
+            ft_reverse = wrap_angle(graph.x - dt * vt_reverse)
+            return ft_reverse, vt_reverse
+        return vt_reverse
+
+    """
+    Graph utilities
+    """
+
+    def _update_graph_batch(self, graph: Data, new_pos: torch.Tensor):
+        # update the node features and positions        
+        graph.x = new_pos
+        graph.pos = new_pos
+        diff = new_pos[graph.edge_index[0]] - new_pos[graph.edge_index[1]]
+        # diff = torch.atan2(torch.sin(diff), torch.cos(diff))
+        graph.edge_attr = diff
+        return graph
+
+    def _center_graph_sample(self, graph: Data):
+        # center the graph sample
+        graph.x = graph.x - scatter(graph.x, graph.batch, dim=0, reduce="mean")
+        return graph
