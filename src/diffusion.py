@@ -7,7 +7,7 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence, Callable, Tuple
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
-from src.data import pos_to_angle, wrap_angle, wrap_pos
+from src.data import pos_to_angle, wrap_angle, wrap_pos, wrapped_diff
 from src.distribution import WrappedNormalDistribution, sigma_norm
 import math
 from torch_geometric.data import Data
@@ -810,9 +810,9 @@ class TDMDiffusion(BaseDiffusion):
         # update the node features and positions        
         graph.x = new_pos
         graph.pos = new_pos
-        diff = new_pos[graph.edge_index[0]] - new_pos[graph.edge_index[1]]
-        # diff = torch.atan2(torch.sin(diff), torch.cos(diff))
-        graph.edge_attr = diff
+        a = new_pos[graph.edge_index[0]]
+        b = new_pos[graph.edge_index[1]]
+        graph.edge_attr = wrapped_diff(a, b)
         return graph
 
     def _center_graph_sample(self, graph: Data):

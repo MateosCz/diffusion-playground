@@ -66,7 +66,12 @@ def wrap_angle(x):
 
 
 
+def wrap_01(x):
+    return torch.remainder(x, 1.0)   # equivalent to x % 1.0, maps to [0, 1)
 
+def wrapped_diff(a, b):
+    """Signed angular difference a - b, wrapped to [-pi, pi)."""
+    return torch.remainder(a - b + torch.pi, 2 * torch.pi) - torch.pi
 
 
 """
@@ -353,17 +358,19 @@ class Shapes_Dataset(Dataset):
         points = points / bbox_span * target_size  # longest side = target_size
 
         # 3) random translation within the remaining room
-        actual_span = points.max(dim=0).values  # (2,) each ≤ target_size
-        room_x = 1.0 - actual_span[0]  # available room for shifting in x
-        room_y = 1.0 - actual_span[1]  # available room for shifting in y
-        if generator is None:
-            tx = torch.rand(1) * room_x
-            ty = torch.rand(1) * room_y
-        else:
-            tx = torch.rand(1, generator=generator) * room_x
-            ty = torch.rand(1, generator=generator) * room_y
-        points[:, 0] += tx
-        points[:, 1] += ty
+        t = (torch.rand(2)-0.5)
+        points = wrap_01(points + t)
+        # actual_span = points.max(dim=0).values  # (2,) each ≤ target_size
+        # room_x = 1.0 - actual_span[0]  # available room for shifting in x
+        # room_y = 1.0 - actual_span[1]  # available room for shifting in y
+        # if generator is None:
+        #     tx = torch.rand(1) * room_x
+        #     ty = torch.rand(1) * room_y
+        # else:
+        #     tx = torch.rand(1, generator=generator) * room_x
+        #     ty = torch.rand(1, generator=generator) * room_y
+        # points[:, 0] += tx
+        # points[:, 1] += ty
 
         return points, corner_mask  # (num_points, 2), (num_points,)
  
@@ -599,7 +606,7 @@ class PyGGraphWrapper(Dataset):
         edge_index = torch.stack([row, col], dim=0)  # (2, N*(N-1))
  
         # --- edge attributes: pairwise angular differences (wrapped) ---
-        diff = pos_in_theta[col] - pos_in_theta[row]  # (E, 2) raw diff
+        diff = wrapped_diff(pos_in_theta[col], pos_in_theta[row])  # (E, 2) raw diff
         # wrap to [-pi, pi)
         # diff = torch.atan2(torch.sin(diff), torch.cos(diff))
         # edge_attr = torch.cat([
