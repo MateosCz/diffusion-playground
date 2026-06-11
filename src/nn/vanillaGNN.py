@@ -118,7 +118,7 @@ class TDM_VanillaGNN(nn.Module):
     def __init__(
         self,
         node_feat_dim: int = 6,
-        edge_feat_dim: int = 6,
+        edge_fourier_bands: int = 8,
         v_dim: int = 2,
         hidden_dim: Union[int, Sequence[int]] = 128,
         num_mp_layers: int = 4,
@@ -180,7 +180,7 @@ class TDM_VanillaGNN(nn.Module):
             self.mp_layers.append(
                 TimeConditionedMPLayer(
                     node_dim=self.hidden_dims[i],
-                    edge_feat_dim=edge_feat_dim,
+                    edge_feat_dim=2 * self.edge_fourier_bands,
                     time_dim=self.time_embedding_dim,
                 )
             )
@@ -249,8 +249,10 @@ class TDM_VanillaGNN(nn.Module):
         h = self.input_norm(h)
 
         # --- Message passing ---
+        # encode edge attributes into sinusoidal positional embedding
+        edge_attr_emb = Block.sinusoidal_positional_embedding(edge_attr.shape[0], self.edge_fourier_bands)
         for mp_layer in self.mp_layers:
-            h = mp_layer(h, edge_index, edge_attr, h_t)
+            h = mp_layer(h, edge_index, edge_attr_emb, h_t)
 
         # --- Output ---
         score = self.output_layer(h)                           # (N_total, output_dim)

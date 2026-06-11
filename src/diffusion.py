@@ -812,7 +812,7 @@ class TDMDiffusion(BaseDiffusion):
         graph.pos = new_pos
         a = new_pos[graph.edge_index[0]]
         b = new_pos[graph.edge_index[1]]
-        graph.edge_attr = wrapped_diff(a, b)
+        graph.edge_attr = a - b
         return graph
 
     def _center_graph_sample(self, graph: Data):

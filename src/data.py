@@ -215,6 +215,8 @@ class Shapes_Dataset(Dataset):
         - shape_types: list of shape names to sample from.
           Options: 'triangle', 'rectangle', 'circle', 'star'
         - scale_range: (min_scale, max_scale) for random scaling.
+        - centered: if True, place each shape's bounding-box center at (0.5, 0.5)
+          with no random translation; otherwise shift/translate randomly in [0, 1)^2.
         - seed: optional RNG seed for reproducibility.
     
     Returns:
@@ -229,6 +231,7 @@ class Shapes_Dataset(Dataset):
         dataset_size: int = 10000,
         shape_types: list[str] | None = None,
         scale_range: tuple[float, float] = (0.2, 0.8),
+        centered: bool = False,
         seed: int | None = None,
     ):
         self.num_points = num_points
@@ -236,7 +239,7 @@ class Shapes_Dataset(Dataset):
         self.shape_types = shape_types or self.SHAPE_TYPES
         self.scale_range = scale_range
         self.seed = seed
- 
+        self.centered = centered
     def __len__(self):
         return self.dataset_size
  
@@ -343,23 +346,27 @@ class Shapes_Dataset(Dataset):
         points = points @ R.T
 
         # --- normalize to [0,1)^2 via rescaling (not clamping) ---
-        # 1) shift so that min corner is at origin
         p_min = points.min(dim=0).values  # (2,)
         p_max = points.max(dim=0).values  # (2,)
-        points = points - p_min  # now in [0, bbox_w] x [0, bbox_h]
-
-        # 2) scale longest side to target_size ∈ [scale_lo, scale_hi]
         bbox_span = (p_max - p_min).max()  # longest side of bounding box
+
         s_lo, s_hi = self.scale_range
         if generator is None:
             target_size = torch.rand(1) * (s_hi - s_lo) + s_lo
         else:
             target_size = torch.rand(1, generator=generator) * (s_hi - s_lo) + s_lo
-        points = points / bbox_span * target_size  # longest side = target_size
 
-        # 3) random translation within the remaining room
-        t = (torch.rand(2)-0.5)
-        points = wrap_01(points + t)
+        if self.centered:
+            # scale about bbox center, then place center at cell midpoint
+            bbox_center = (p_min + p_max) / 2
+            points = (points - bbox_center) / bbox_span * target_size + 0.5
+        else:
+            points = (points - p_min) / bbox_span * target_size
+            if generator is None:
+                t = torch.rand(2) - 0.5
+            else:
+                t = torch.rand(2, generator=generator) - 0.5
+            points = wrap_01(points + t)
         # actual_span = points.max(dim=0).values  # (2,) each ≤ target_size
         # room_x = 1.0 - actual_span[0]  # available room for shifting in x
         # room_y = 1.0 - actual_span[1]  # available room for shifting in y
@@ -606,7 +613,7 @@ class PyGGraphWrapper(Dataset):
         edge_index = torch.stack([row, col], dim=0)  # (2, N*(N-1))
  
         # --- edge attributes: pairwise angular differences (wrapped) ---
-        diff = wrapped_diff(pos_in_theta[col], pos_in_theta[row])  # (E, 2) raw diff
+        diff = pos_in_theta[col] - pos_in_theta[row]  # (E, 2) raw diff
         # wrap to [-pi, pi)
         # diff = torch.atan2(torch.sin(diff), torch.cos(diff))
         # edge_attr = torch.cat([
@@ -614,7 +621,7 @@ class PyGGraphWrapper(Dataset):
         #     torch.sin(diff),
         #     torch.cos(diff),
         # ], dim=-1)  # (E, 6)
-        edge_attr = diff
+        edge_attr = diff # use raw difference for edge attributes
  
         data = Data(
             x=node_feat,
