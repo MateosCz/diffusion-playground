@@ -12,7 +12,7 @@ Input:
     data.x          : (N_total, node_feat_dim)  -- node features (angles + optional Fourier)
     data.pos        : (N_total, 2)              -- raw fractional coordinates
     data.edge_index : (2, E_total)              -- fully-connected edges
-    data.edge_attr  : (E_total, edge_feat_dim)  -- wrapped angular diffs + sin/cos
+    data.edge_attr  : (E_total, edge_feat_dim)  -- raw difference between node positions
     data.batch      : (N_total,)                -- batch assignment
 
   vt : (N_total, 2)  -- velocity at each node
@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import scatter
+from src.data import scatter_center
 from typing import Sequence, Union
 
 import src.nn.scoreNNBlock as Block
@@ -45,9 +46,9 @@ class TimeConditionedMPLayer(MessagePassing):
     pattern of concatenating h_t at each hidden layer.
     """
 
-    def __init__(self, node_dim: int, edge_feat_dim: int, time_dim: int):
+    def __init__(self, node_dim: int, edge_feat_dim: int, time_dim: int, pt_invariant: bool = False):
         super().__init__(aggr="sum")
-
+        self.pt_invariant = pt_invariant
         # Edge message MLP: (h_i || h_j || edge_attr) -> message
         self.edge_mlp = nn.Sequential(
             nn.Linear(2 * node_dim + edge_feat_dim, node_dim),
@@ -129,12 +130,15 @@ class TDM_VanillaGNN(nn.Module):
         with_sincos_position: bool = True,
         only_sincos_position: bool = True,
         position_fourier_bands: int = 8,
+        pt_invariant: bool = False,
+        zero_cog: bool = False,
         **kwargs,
     ):
         super().__init__()
         self.v_dim = v_dim
         self.output_dim = output_dim
         self.total_time = total_time
+        self.edge_fourier_bands = edge_fourier_bands
         self.time_embedding_scale = time_embedding_scale
         self.time_embedding_half_dim = time_embedding_half_dim
         self.time_embedding_dim = 2 * time_embedding_half_dim
@@ -145,10 +149,12 @@ class TDM_VanillaGNN(nn.Module):
             self.hidden_dims = [hidden_dim] * num_mp_layers
         else:
             self.hidden_dims = list(hidden_dim)
-        self.v_dim = v_dim
         self.position_fourier_bands = position_fourier_bands
-        self.node_feat_dim = node_feat_dim
-
+        if self.pt_invariant:
+            self.node_feat_dim = v_dim
+        else:
+            self.node_feat_dim = node_feat_dim
+        self.pt_invariant = pt_invariant
         if self.with_sincos_position:
             sincos_dim = self.node_feat_dim * 2 * self.position_fourier_bands
             if self.only_sincos_position:
@@ -176,11 +182,15 @@ class TDM_VanillaGNN(nn.Module):
 
         # --- Message-passing layers ---
         self.mp_layers = nn.ModuleList()
+        if self.pt_invariant:
+            edge_feat_dim = 2 * self.edge_fourier_bands
+        else:
+            edge_feat_dim = self.edge_feat_dim
         for i in range(len(self.hidden_dims)):
             self.mp_layers.append(
                 TimeConditionedMPLayer(
                     node_dim=self.hidden_dims[i],
-                    edge_feat_dim=2 * self.edge_fourier_bands,
+                    edge_feat_dim=edge_feat_dim,
                     time_dim=self.time_embedding_dim,
                 )
             )
@@ -244,18 +254,38 @@ class TDM_VanillaGNN(nn.Module):
                 x = sincos_x
             else:
                 x = torch.cat([x, sincos_x], dim=-1)
-        x = torch.cat([x, vt], dim=-1)
+        if self.pt_invariant:
+            x = vt # (N_total, v_dim)
+        else:
+            x = torch.cat([x, vt], dim=-1)
         h = self.lifting_layer_x(x)  # (N_total, hidden_dims[0])
         h = self.input_norm(h)
 
         # --- Message passing ---
         # encode edge attributes into sinusoidal positional embedding
-        edge_attr_emb = Block.sinusoidal_positional_embedding(edge_attr.shape[0], self.edge_fourier_bands)
+        if self.pt_invariant:
+            raw_diff = edge_attr
+            frequencies = torch.arange(
+                1,
+                self.edge_fourier_bands + 1,
+                device=x.device,
+                dtype=x.dtype,
+            )
+            raw_diff_freq = raw_diff.unsqueeze(-1) * frequencies # (E_total, edge_fourier_bands)
+            sincos_diff = torch.cat([
+                torch.sin(raw_diff_freq).flatten(start_dim=-2),
+                torch.cos(raw_diff_freq).flatten(start_dim=-2),
+            ], dim=-1)
+            edge_attr_emb = sincos_diff
+        else:
+            edge_attr_emb = edge_attr
         for mp_layer in self.mp_layers:
             h = mp_layer(h, edge_index, edge_attr_emb, h_t)
 
         # --- Output ---
-        score = self.output_layer(h)                           # (N_total, output_dim)
+        score = self.output_layer(h)           # (N_total, output_dim)
+        if self.zero_cog:
+            score = scatter_center(score, batch)
         return score
 
     def forward_from_data(self, data, vt: torch.Tensor, t: torch.Tensor) -> torch.Tensor:

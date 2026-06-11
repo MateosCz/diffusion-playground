@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 import math
 from torch_geometric.data import Data, Batch
 from typing import Literal
+from torch_geometric.utils import scatter
 """
 data processing helpers
 """
@@ -73,6 +74,9 @@ def wrapped_diff(a, b):
     """Signed angular difference a - b, wrapped to [-pi, pi)."""
     return torch.remainder(a - b + torch.pi, 2 * torch.pi) - torch.pi
 
+# scatter center the data by subgraph's mean
+def scatter_center(x, idx):
+    return x - scatter(x, idx, dim=0, reduce="mean")
 
 """
 data generation
