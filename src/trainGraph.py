@@ -164,12 +164,13 @@ def main():
     n_epoch = 200
     lr = 1e-3
     total_time = 2.0
+    pt_invariant = True
     base_ds_kw = "triangle"
-    base_ds_kw = "mix"
+    # base_ds_kw = "mix"
 
     num_mp_layers = 3
     node_feat_dim = 2
-    edge_feat_dim = 2
+    edge_fourier_bands = 8
     v_dim = 2
 
     # data shape: each sample -> (dim,)
@@ -188,13 +189,15 @@ def main():
         base_ds = Shapes_Dataset(
             num_points=32,
             dataset_size=10000,
-            shape_types=["triangle"]
+            shape_types=["triangle"],
+            centered=pt_invariant
         )
     elif base_ds_kw == "mix":
         base_ds = Shapes_Dataset(
             num_points=32,
             dataset_size=10000,
-            shape_types=["triangle", "rectangle", "circle", "star"]
+            shape_types=["triangle", "rectangle", "circle", "star"],
+            centered=pt_invariant
         )
     graph_ds = PyGGraphWrapper(base_ds, num_points_range=(26,32))
     loader = PyGDataLoader(graph_ds, batch_size=batch_size, shuffle=True)
@@ -204,7 +207,7 @@ def main():
     diffusion = TDMDiffusion(dim=dim, integrator_type="Euler", simplified_param=True).to(device)
     model = TDM_VanillaGNN(
         node_feat_dim=node_feat_dim,
-        edge_feat_dim=edge_feat_dim,
+        edge_fourier_bands=edge_fourier_bands,
         v_dim=v_dim,
         hidden_dim=hidden_dim,
         num_mp_layers=num_mp_layers,
@@ -212,6 +215,8 @@ def main():
         position_fourier_bands=position_fourier_bands,
         with_sincos_position=with_sincos_position,
         only_sincos_position=only_sincos_position,
+        pt_invariant=pt_invariant,
+        zero_cog=pt_invariant,
         output_dim=output_dim,
         total_time=total_time,
         time_embedding_scale=time_embedding_scale,
@@ -239,6 +244,7 @@ def main():
                 t_dist_kw=t_dist_kw,
                 v0_dist_kw="zero",
                 return_time=True,
+                zero_cog=pt_invariant
             )
             pred_score = model.forward_from_data(batch_graph_noised, v_t, t_scalar) # (N_total, 2)
 

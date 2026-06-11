@@ -76,7 +76,9 @@ def wrapped_diff(a, b):
 
 # scatter center the data by subgraph's mean
 def scatter_center(x, idx):
-    return x - scatter(x, idx, dim=0, reduce="mean")
+    centers = scatter(x, idx, dim=0, reduce="mean")
+    centers = centers[idx]
+    return x - centers
 
 """
 data generation

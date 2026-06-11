@@ -144,25 +144,24 @@ class TDM_VanillaGNN(nn.Module):
         self.time_embedding_dim = 2 * time_embedding_half_dim
         self.with_sincos_position = with_sincos_position
         self.only_sincos_position = only_sincos_position
+        self.zero_cog = zero_cog
+        self.pt_invariant = pt_invariant
+        self.node_feat_dim = node_feat_dim
         # Build list of hidden widths
         if isinstance(hidden_dim, int):
             self.hidden_dims = [hidden_dim] * num_mp_layers
         else:
             self.hidden_dims = list(hidden_dim)
         self.position_fourier_bands = position_fourier_bands
-        if self.pt_invariant:
-            self.node_feat_dim = v_dim
-        else:
-            self.node_feat_dim = node_feat_dim
-        self.pt_invariant = pt_invariant
         if self.with_sincos_position:
             sincos_dim = self.node_feat_dim * 2 * self.position_fourier_bands
             if self.only_sincos_position:
                 self.node_input_dim = sincos_dim
             else:
                 self.node_input_dim = self.node_feat_dim + sincos_dim
-
         self.node_input_dim = self.node_input_dim + self.v_dim  # concatenate node features + velocity
+        if self.pt_invariant:
+            self.node_input_dim = self.v_dim
 
         # --- Lifting layers (same pattern as MLP) ---
         self.lifting_layer_x = nn.Sequential(
@@ -183,9 +182,13 @@ class TDM_VanillaGNN(nn.Module):
         # --- Message-passing layers ---
         self.mp_layers = nn.ModuleList()
         if self.pt_invariant:
-            edge_feat_dim = 2 * self.edge_fourier_bands
+            # edge_attr is the raw position difference (dim = v_dim). The
+            # sinusoidal embedding produces (raw_dim * 2 * edge_fourier_bands).
+            edge_feat_dim = self.v_dim * 2 * self.edge_fourier_bands
         else:
-            edge_feat_dim = self.edge_feat_dim
+            # edge_attr is used raw (no embedding); its dim is the position
+            # difference dim (= v_dim).
+            edge_feat_dim = self.v_dim
         for i in range(len(self.hidden_dims)):
             self.mp_layers.append(
                 TimeConditionedMPLayer(
