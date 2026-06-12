@@ -9,12 +9,15 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import lightning as L
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 
 pt_invariant = True
 total_time = 2.0
 dim = 2
 n_epoch = 200
 lr = 1e-3
+base_ds_kw = "triangle"
+base_ds_kw = "mix"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -44,7 +47,7 @@ nn_kwargs = {
 data_kwargs = {
     "num_points": 32,
     "dataset_size": 10000,
-    "shape_types": ["triangle"],
+    "shape_types": ["triangle"] if base_ds_kw == "triangle" else ["triangle", "rectangle", "star"],
     "centered": pt_invariant,
     "num_points_range": (26,32),
     "batch_size": 32
@@ -93,7 +96,7 @@ def main():
         position_fourier_bands=nn_kwargs["position_fourier_bands"],
         pt_invariant=nn_kwargs["pt_invariant"],
         zero_cog=nn_kwargs["zero_cog"]
-    ).to(device)
+    )
 
     lit_gnn = LitVanillaGNN(
         model=gnn,
@@ -101,10 +104,22 @@ def main():
         diffusion_kwargs=diffusion_kwargs,
         lr=lr
     )
+    experiment_name = f"ptiGNN_shapes_{base_ds_kw}" if pt_invariant else f"GNN_shapes_{base_ds_kw}"
+    wandb_logger = WandbLogger(
+        name=experiment_name,
+        save_dir="wandb_logs",
+        project = "diffusion-playground"
+    )
 
-    trainer = L.Trainer()
-    trainer.fit(model=lit_gnn, train_dataloaders=loader)
+    trainer = L.Trainer(
+        logger=wandb_logger,
+        max_epochs=n_epoch
+    )
 
     
+
+    trainer.fit(model=lit_gnn, train_dataloaders=loader)
+
+
 if __name__ == "__main__":
     main()

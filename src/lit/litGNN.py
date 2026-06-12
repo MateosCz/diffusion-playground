@@ -28,8 +28,39 @@ class LitVanillaGNN(L.LightningModule):
         pred_score = self.model.forward_from_data(batch_graph_noised, v_t, t_scalar)
         t_all = t_scalar[batch_graph.batch]
         loss = weighted_score_loss(pred_score, target_score, t_all, self.diffusion.total_time)
+        self.log("train_loss", loss, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         return optimizer
+
+    def test_step(self, batch: Data) -> torch.Tensor:
+        batch_graph = batch
+        (v_t, batch_graph_noised), target_score, t_scalar = self.diffusion.sample_forward_graph(
+            graph=batch_graph,
+            t_dist_kw=self.diffusion_kwargs["t_dist_kw"],
+            v0_dist_kw=self.diffusion_kwargs["v0_dist_kw"],
+            return_time=True,
+            zero_cog=self.diffusion_kwargs["zero_cog"]
+        )
+        pred_score = self.model.forward_from_data(batch_graph_noised, v_t, t_scalar)
+        t_all = t_scalar[batch_graph.batch]
+        loss = weighted_score_loss(pred_score, target_score, t_all, self.diffusion.total_time)
+        self.log("test_loss", loss)
+        return loss
+
+    def validation_step(self, batch: Data):
+        batch_graph = batch
+        (v_t, batch_graph_noised), target_score, t_scalar = self.diffusion.sample_forward_graph(
+            graph=batch_graph,
+            t_dist_kw=self.diffusion_kwargs["t_dist_kw"],
+            v0_dist_kw=self.diffusion_kwargs["v0_dist_kw"],
+            return_time=True,
+            zero_cog=self.diffusion_kwargs["zero_cog"]
+        )
+        pred_score = self.model.forward_from_data(batch_graph_noised, v_t, t_scalar)
+        t_all = t_scalar[batch_graph.batch]
+        loss = weighted_score_loss(pred_score, target_score, t_all, self.diffusion.total_time)
+        self.log("validation_loss", loss, prog_bar=True)
+        return loss
