@@ -109,7 +109,6 @@ class TDMDiffusion(BaseDiffusion):
     def sample_forward(
         self,
         f0: torch.Tensor, # input Lie group data in angle form, with shape (batch_size, dim) each point in [-pi, pi)^dim
-        total_time: float, 
         t_dist_kw: Literal["uniform", "quadratic", "linear", "constant"]="uniform", 
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero", # usually initialized with v0 = 0
         n_steps: int = 100, # number of time steps if t_dist_kw is "linear"
@@ -126,12 +125,12 @@ class TDMDiffusion(BaseDiffusion):
         if t_dist_kw == "uniform":
             ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) # shape (batch_size, 1)
             # ts = ts.view(batch_size,1).expand(batch_size, dim) # shape (batch_size, dim)
-            ts = ts * (total_time - t_min) + t_min
+            ts = ts * (self.total_time - t_min) + t_min
         elif t_dist_kw == "quadratic":
             ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) ** 2
-            ts = ts * (total_time - t_min) + t_min
+            ts = ts * (self.total_time - t_min) + t_min
         elif t_dist_kw == "linear":
-            ts = torch.linspace(0, total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
+            ts = torch.linspace(0, self.total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
             ts = torch.unsqueeze(ts,dim=0).repeat(batch_size,1) # shape (batch_size, n_steps)
         elif t_dist_kw == "constant":
             ts = constant_t * torch.ones(size=(batch_size,1), device=device, dtype=dtype)
@@ -253,7 +252,6 @@ class TDMDiffusion(BaseDiffusion):
         fT_prior_kw: Literal["stdGauss", "uniform"],
         vT_prior_kw: Literal["stdGauss", "uniform"],
         data_shape: Tuple[int, int, int],
-        total_time: float,
         tdm_score_fn: Callable[[torch.Tensor,torch.Tensor,torch.Tensor],torch.Tensor], 
         # score function of TDM model, input f_t, v_t, t, return the score
         n_steps: int = 100,
@@ -278,7 +276,7 @@ class TDMDiffusion(BaseDiffusion):
         batch_size = data_shape[0]
         dim = data_shape[1]
 
-        dt = total_time / (n_steps-1) # calculate the dt
+        dt = self.total_time / (n_steps-1) # calculate the dt
         # sample fT and vT from prior distribution
         if fT_prior_kw == "stdGauss":
             fT = torch.randn(size=(batch_size, dim), device=device, dtype=dtype)
@@ -297,12 +295,12 @@ class TDMDiffusion(BaseDiffusion):
         vt_reverse_trajectory = []
         vt_reverse_trajectory.append(vt_reverse)
         t_list = []
-        t_reverse = torch.ones((batch_size,1), device=device, dtype=dtype) * total_time # shape (batch_size, 1)
+        t_reverse = torch.ones((batch_size,1), device=device, dtype=dtype) * self.total_time # shape (batch_size, 1)
         t_list.append(float(t_reverse[0, 0].detach().cpu()))
         dt = torch.tensor(dt, device=device, dtype=dtype)
         sigma_list = []
         sigma_list.append(float(self.sde.sigma_t(t_reverse)[0, 0].detach().cpu()))
-        t_reverse_list = torch.linspace(total_time, 0, n_steps, device=device, dtype=dtype)
+        t_reverse_list = torch.linspace(self.total_time, 0, n_steps, device=device, dtype=dtype)
         t_reverse_list = torch.unsqueeze(t_reverse_list, dim=0).repeat(batch_size, 1) # shape (batch_size, n_steps)
         t_reverse_list = t_reverse_list.view(batch_size, n_steps, 1) # shape (batch_size, n_steps, 1)
         # reverse time step by step
@@ -494,7 +492,6 @@ class TDMDiffusion(BaseDiffusion):
     def sample_forward_graph(
         self,
         graph: Data,
-        total_time: float,
         t_dist_kw: Literal["uniform", "quadratic", "constant"] = "uniform",
         v0_dist_kw: Literal["stdGauss", "zero"] = "zero",
         constant_t: float = 1.0,
@@ -544,10 +541,10 @@ class TDMDiffusion(BaseDiffusion):
         # --- one time per graph, then expand to per-node ---
         if t_dist_kw == "uniform":
             ts = torch.rand(size=(num_graphs, 1), device=device, dtype=dtype)
-            ts = ts * (total_time - t_min) + t_min
+            ts = ts * (self.total_time - t_min) + t_min
         elif t_dist_kw == "quadratic":
             ts = torch.rand(size=(num_graphs, 1), device=device, dtype=dtype) ** 2
-            ts = ts * (total_time - t_min) + t_min
+            ts = ts * (self.total_time - t_min) + t_min
         elif t_dist_kw == "constant":
             ts = constant_t * torch.ones(size=(num_graphs, 1), device=device, dtype=dtype)
         else:
@@ -609,7 +606,6 @@ class TDMDiffusion(BaseDiffusion):
         vT_prior_kw: torch.Tensor,
         graph_nodes: Tuple,
         data_dim: int,
-        total_time: float,
         tdm_score_fn: Callable[[Data, torch.Tensor, torch.Tensor], torch.Tensor],
         n_steps: int = 100,
         sample_trajectory: bool = False,
@@ -690,7 +686,7 @@ class TDMDiffusion(BaseDiffusion):
         batch_vec = graph_T.batch                           # (N_total,)
         num_graphs = int(batch_vec.max().item()) + 1
 
-        dt_scalar = total_time / (n_steps - 1)
+        dt_scalar = self.total_time / (n_steps - 1)
         dt = torch.tensor(dt_scalar, device=device, dtype=dtype)
 
         ft_reverse = graph_T.x.clone()                     # (N_total, 2)
@@ -702,7 +698,7 @@ class TDMDiffusion(BaseDiffusion):
             ft_traj.append(ft_reverse.cpu())
             vt_traj.append(vt_reverse.cpu())
 
-        t_reverse_list = torch.linspace(total_time, 0, n_steps, device=device, dtype=dtype)
+        t_reverse_list = torch.linspace(self.total_time, 0, n_steps, device=device, dtype=dtype)
         # shape: (num_graphs, n_steps, 1) — same time for all graphs at each step
         t_reverse_list = t_reverse_list.unsqueeze(0).unsqueeze(-1).expand(num_graphs, -1, -1)
         t_list.append(float(t_reverse_list[0, 0, 0].item()))
