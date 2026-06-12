@@ -7,13 +7,13 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence, Callable, Tuple
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
-from src.data import pos_to_angle, wrap_angle, wrap_pos
+from src.data import pos_to_angle, wrap_angle, wrap_pos, wrapped_diff
 from src.distribution import WrappedNormalDistribution, sigma_norm
 import math
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch_geometric.utils import scatter
-from src.data import make_random_graph
+from src.data import make_random_graph, scatter_center
 
 
 
@@ -500,6 +500,7 @@ class TDMDiffusion(BaseDiffusion):
         constant_t: float = 1.0,
         return_time: bool = False,
         t_min: float = 5e-3,
+        zero_cog: bool = False,
     ):
         """
         Graph-structured forward (noising) process for training.
@@ -566,6 +567,7 @@ class TDMDiffusion(BaseDiffusion):
         epsv = torch.randn_like(v0s)
         vts = epsv * sigma_vt + mu_vt
 
+
         if v0_dist_kw == "zero":
             scorev = -vts / (sigma_vt ** 2)
         else:
@@ -578,16 +580,21 @@ class TDMDiffusion(BaseDiffusion):
         # --- target score ---
         if self.simplified_param:
             scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=False)
+            if zero_cog:
+                scorec = scatter_center(scorec, batch_vec)
             sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(ts_node))
             score = scorec / sigma_norm_r_t
         else:
             scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=True)
+            if zero_cog:
+                scorec = scatter_center(scorec, batch_vec)
             score = scorec + scorev
 
         # --- refresh graph with noised positions ---
         # noised_graph = self._update_graph_batch(graph, fts)
         noised_graph = graph.clone()
         noised_graph = self._update_graph_batch(noised_graph, fts)
+
 
 
 
@@ -810,9 +817,9 @@ class TDMDiffusion(BaseDiffusion):
         # update the node features and positions        
         graph.x = new_pos
         graph.pos = new_pos
-        diff = new_pos[graph.edge_index[0]] - new_pos[graph.edge_index[1]]
-        # diff = torch.atan2(torch.sin(diff), torch.cos(diff))
-        graph.edge_attr = diff
+        a = new_pos[graph.edge_index[0]]
+        b = new_pos[graph.edge_index[1]]
+        graph.edge_attr = a - b
         return graph
 
     def _center_graph_sample(self, graph: Data):
