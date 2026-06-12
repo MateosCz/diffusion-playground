@@ -165,10 +165,10 @@ def main():
     lr = 1e-3
     total_time = 2.0
     pt_invariant = True
-    base_ds_kw = "triangle"
-    # base_ds_kw = "mix"
+    # base_ds_kw = "triangle"
+    base_ds_kw = "mix"
 
-    num_mp_layers = 3
+    num_mp_layers = 6
     node_feat_dim = 2
     edge_fourier_bands = 8
     v_dim = 2
@@ -195,8 +195,8 @@ def main():
     elif base_ds_kw == "mix":
         base_ds = Shapes_Dataset(
             num_points=32,
-            dataset_size=10000,
-            shape_types=["triangle", "rectangle", "circle", "star"],
+            dataset_size=20000,
+            shape_types=["triangle", "rectangle", "star"],
             centered=pt_invariant
         )
     graph_ds = PyGGraphWrapper(base_ds, num_points_range=(26,32))
@@ -305,7 +305,11 @@ def main():
     plt.savefig(f"training_loss_{base_ds_kw}_shapes.png", dpi=150)
     plt.show()
     # save model
-    torch.save(model.state_dict(), f"vanilla_gnn_{base_ds_kw}_shapes.pt")
-    print(f"Training done. Saved model to vanilla_gnn_{base_ds_kw}_shapes.pt")
+    if pt_invariant:
+        torch.save(model.state_dict(), f"vanilla_gnn_{base_ds_kw}_shapes_pti.pt")
+        print(f"Training done. Saved model to vanilla_gnn_{base_ds_kw}_shapes_pti.pt")
+    else:
+        torch.save(model.state_dict(), f"vanilla_gnn_{base_ds_kw}.pt")
+        print(f"Training done. Saved model to vanilla_gnn_{base_ds_kw}.pt")
 if __name__ == "__main__":
     main()
