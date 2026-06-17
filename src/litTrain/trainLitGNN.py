@@ -113,7 +113,8 @@ def main():
 
     trainer = L.Trainer(
         logger=wandb_logger,
-        max_epochs=n_epoch
+        max_epochs=n_epoch,
+        accelerator="gpu"
     )
 
     
