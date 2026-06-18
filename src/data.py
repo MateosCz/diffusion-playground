@@ -238,6 +238,7 @@ class Shapes_Dataset(Dataset):
         shape_types: list[str] | None = None,
         scale_range: tuple[float, float] = (0.2, 0.8),
         centered: bool = False,
+        fix_rotation: bool = False,
         seed: int | None = None,
     ):
         self.num_points = num_points
@@ -246,6 +247,7 @@ class Shapes_Dataset(Dataset):
         self.scale_range = scale_range
         self.seed = seed
         self.centered = centered
+        self.fix_rotation = fix_rotation
     def __len__(self):
         return self.dataset_size
  
@@ -346,6 +348,8 @@ class Shapes_Dataset(Dataset):
             theta = torch.rand(1) * 2 * math.pi
         else:
             theta = torch.rand(1, generator=generator) * 2 * math.pi
+        if self.fix_rotation:
+            theta = torch.tensor(0.25 * math.pi)
         cos_t, sin_t = torch.cos(theta), torch.sin(theta)
         R = torch.tensor([[cos_t, -sin_t],
                           [sin_t,  cos_t]]).squeeze()  # (2, 2)
