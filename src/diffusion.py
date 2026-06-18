@@ -74,7 +74,8 @@ class TDMDiffusion(BaseDiffusion):
         f_scale: float = 2 * torch.pi,
         total_time: float = 2.0,
         simplified_param: bool = True,
-        n_sigma_rs:int = 2000
+        n_sigma_rs:int = 2000,
+        zero_cog: bool = False,
         ):
         super().__init__()
         if sde is None:
@@ -88,6 +89,7 @@ class TDMDiffusion(BaseDiffusion):
         self.simplified_param = simplified_param
         self.n_sigma_rs = n_sigma_rs
         self.total_time = total_time
+        self.zero_cog = zero_cog
         if simplified_param:
             sigma_rs = self._sigma_rt(torch.linspace(0, total_time, self.n_sigma_rs))
             sigma_norms_r = sigma_norm(sigma_rs, T=2 * torch.pi, N=self.trunc_n, sn=self.n_sigma_rs)
@@ -143,7 +145,7 @@ class TDMDiffusion(BaseDiffusion):
         sigma_vt = self.sde.sigma_t(ts)
 
         # sampling vt
-        epsv = torch.randn(size=v0s.shape, device=device, dtype=dtype)
+        epsv = torch.randn(size=v0s.shape, device=device, dtype=dtype) # sample the noise of vt
         # epsv = self.center_data(epsv)
 
         vts = epsv*sigma_vt + mu_vt
@@ -193,11 +195,12 @@ class TDMDiffusion(BaseDiffusion):
     but we only sample the anti-diagonal scalar r_t
 
     """
-    def _sample_r_given_v(self, vt, v0,t):
+    def _sample_r_given_v(self, vt, v0,t, batch_vec=None):
         mu_rt = self._mu_rt(vt, v0, t)
         sigma_rt = self._sigma_rt(t)
-        epsrt = torch.randn(size=vt.shape, device=vt.device, dtype=vt.dtype)
-        # epsrt = self.center_data(epsrt)
+        epsrt = torch.randn(size=vt.shape, device=vt.device, dtype=vt.dtype) # sample the noise of rt
+        if self.zero_cog:
+            epsrt = scatter_center(epsrt, batch_vec) # remove translational motion of noise
         rt_raw = sigma_rt * epsrt + mu_rt
         wrapped_rt = wrap_angle(rt_raw) 
         return wrapped_rt
@@ -497,7 +500,6 @@ class TDMDiffusion(BaseDiffusion):
         constant_t: float = 1.0,
         return_time: bool = False,
         t_min: float = 5e-3,
-        zero_cog: bool = False,
     ):
         """
         Graph-structured forward (noising) process for training.
@@ -561,7 +563,9 @@ class TDMDiffusion(BaseDiffusion):
         # --- velocity forward process ---
         mu_vt = self.sde.mean_t_coeff(ts_node) * v0s
         sigma_vt = self.sde.sigma_t(ts_node)
-        epsv = torch.randn_like(v0s)
+        epsv = torch.randn_like(v0s) # sample the noise of vt
+        if self.zero_cog:
+            epsv = scatter_center(epsv, batch_vec) # remove translational motion of noise
         vts = epsv * sigma_vt + mu_vt
 
 
@@ -571,19 +575,19 @@ class TDMDiffusion(BaseDiffusion):
             scorev = -epsv / sigma_vt
 
         # --- position forward process ---
-        wrapped_rts = self._sample_r_given_v(vts, v0s, ts_node)
+        wrapped_rts = self._sample_r_given_v(vts, v0s, ts_node, batch_vec) # sample rt
         fts = wrap_angle(f0 + wrapped_rts)
 
         # --- target score ---
         if self.simplified_param:
             scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=False)
-            if zero_cog:
+            if self.zero_cog:
                 scorec = scatter_center(scorec, batch_vec)
             sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(ts_node))
             score = scorec / sigma_norm_r_t
         else:
             scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=True)
-            if zero_cog:
+            if self.zero_cog:
                 scorec = scatter_center(scorec, batch_vec)
             score = scorec + scorev
 
@@ -679,7 +683,10 @@ class TDMDiffusion(BaseDiffusion):
 
         
 
-        
+        if self.zero_cog:
+            vT = scatter_center(vT, graph_T.batch)
+            fT = scatter_center(graph_T.x, graph_T.batch)
+            graph_T = self._update_graph_batch(graph_T, fT)
 
         device = graph_T.x.device
         dtype = graph_T.x.dtype
@@ -714,6 +721,11 @@ class TDMDiffusion(BaseDiffusion):
 
             score_learned = tdm_score_fn(graph, vt_reverse, t_g)   # (N_total, 2)
             eps_v = torch.randn_like(vt_reverse)
+
+
+            if self.zero_cog:
+                score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
+                eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
 
             if self.simplified_param:
                 prefactor = self._get_prefector(t_n)                # (N_total, 1)
@@ -794,6 +806,9 @@ class TDMDiffusion(BaseDiffusion):
         score_learned = score_fn(graph, vt_reverse, t_g)           # (N_total, 2)
         tau_t = torch.tensor(tau, device=vt_reverse.device, dtype=vt_reverse.dtype)
         eps_v = torch.randn_like(vt_reverse)
+        if self.zero_cog:
+            score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
+            eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
         prefactor = self._get_prefector(t_n)
         sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_n))
         sigma_v = self.sde.sigma_t(t_n)
