@@ -17,7 +17,7 @@ dim = 2
 n_epoch = 200
 lr = 1e-3
 base_ds_kw = "triangle"
-base_ds_kw = "mix"
+# base_ds_kw = "mix"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -46,11 +46,12 @@ nn_kwargs = {
 
 data_kwargs = {
     "num_points": 32,
-    "dataset_size": 10000,
+    "dataset_size": 1000,
     "shape_types": ["triangle"] if base_ds_kw == "triangle" else ["triangle", "rectangle", "star"],
     "centered": pt_invariant,
     "num_points_range": (26,32),
-    "batch_size": 32
+    "batch_size": 32,
+    "fix_rotation": True
 }
 
 
@@ -62,7 +63,8 @@ def main():
         num_points=data_kwargs["num_points"],
         dataset_size=data_kwargs["dataset_size"],
         shape_types=data_kwargs["shape_types"],
-        centered=data_kwargs["centered"]
+        centered=data_kwargs["centered"],
+        fix_rotation=data_kwargs["fix_rotation"]
     )
 
     graph_ds = PyGGraphWrapper(
@@ -78,7 +80,8 @@ def main():
     diffusion = TDMDiffusion(
         dim=dim,
         integrator_type="Euler",
-        simplified_param=True
+        simplified_param=True,
+        zero_cog=nn_kwargs["zero_cog"]
     )
 
     gnn = TDM_VanillaGNN(

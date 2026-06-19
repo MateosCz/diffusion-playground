@@ -15,6 +15,12 @@ class LitVanillaGNN(L.LightningModule):
         self.lr = lr
         self.diffusion = diffusion
         self.diffusion_kwargs = diffusion_kwargs
+        self._train_loss = []
+        self.save_hyperparameters()
+
+    def forward_from_data(self, graph, vt: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return self.model.forward_from_data(graph, vt, t)
+
 
     def training_step(self, batch: Data) -> torch.Tensor:
         batch_graph = batch
@@ -23,12 +29,12 @@ class LitVanillaGNN(L.LightningModule):
             t_dist_kw=self.diffusion_kwargs["t_dist_kw"],
             v0_dist_kw=self.diffusion_kwargs["v0_dist_kw"],
             return_time=True,
-            zero_cog=self.diffusion_kwargs["zero_cog"]
         )
         pred_score = self.model.forward_from_data(batch_graph_noised, v_t, t_scalar)
         t_all = t_scalar[batch_graph.batch]
         loss = weighted_score_loss(pred_score, target_score, t_all, self.diffusion.total_time)
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train/loss", prog_bar=True)
+        self._train_loss.append(loss.detach())
         return loss
 
     def configure_optimizers(self):
@@ -42,12 +48,11 @@ class LitVanillaGNN(L.LightningModule):
             t_dist_kw=self.diffusion_kwargs["t_dist_kw"],
             v0_dist_kw=self.diffusion_kwargs["v0_dist_kw"],
             return_time=True,
-            zero_cog=self.diffusion_kwargs["zero_cog"]
         )
         pred_score = self.model.forward_from_data(batch_graph_noised, v_t, t_scalar)
         t_all = t_scalar[batch_graph.batch]
         loss = weighted_score_loss(pred_score, target_score, t_all, self.diffusion.total_time)
-        self.log("test_loss", loss)
+        self.log("test/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch: Data):
@@ -57,10 +62,22 @@ class LitVanillaGNN(L.LightningModule):
             t_dist_kw=self.diffusion_kwargs["t_dist_kw"],
             v0_dist_kw=self.diffusion_kwargs["v0_dist_kw"],
             return_time=True,
-            zero_cog=self.diffusion_kwargs["zero_cog"]
         )
         pred_score = self.model.forward_from_data(batch_graph_noised, v_t, t_scalar)
         t_all = t_scalar[batch_graph.batch]
         loss = weighted_score_loss(pred_score, target_score, t_all, self.diffusion.total_time)
-        self.log("validation_loss", loss, prog_bar=True)
+        self.log("validation/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
+
+    def on_train_epoch_end(self):
+        losses = torch.stack(self._train_loss)
+        mean_loss = losses.mean()
+        var = losses.var(unbiased=False)
+        std = losses.std(unbiased=False)
+        self.log_dict({
+            "train/loss_mean": mean_loss,
+            "train/loss_var": var,
+            "train/loss_std": std
+        })
+        self._train_loss.clear()
+    
