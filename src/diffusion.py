@@ -76,6 +76,8 @@ class TDMDiffusion(BaseDiffusion):
         simplified_param: bool = True,
         n_sigma_rs:int = 2000,
         zero_cog: bool = False,
+        zeor_cog_score: bool = False,
+        **kwargs
         ):
         super().__init__()
         if sde is None:
@@ -90,6 +92,7 @@ class TDMDiffusion(BaseDiffusion):
         self.n_sigma_rs = n_sigma_rs
         self.total_time = total_time
         self.zero_cog = zero_cog
+        self.zero_cog_score = zero_cog_score
         if simplified_param:
             sigma_rs = self._sigma_rt(torch.linspace(0, total_time, self.n_sigma_rs))
             sigma_norms_r = sigma_norm(sigma_rs, T=2 * torch.pi, N=self.trunc_n, sn=self.n_sigma_rs)
@@ -581,13 +584,13 @@ class TDMDiffusion(BaseDiffusion):
         # --- target score ---
         if self.simplified_param:
             scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=False)
-            if self.zero_cog:
+            if self.zero_cog and self.zero_cog_score:   
                 scorec = scatter_center(scorec, batch_vec)
             sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(ts_node))
             score = scorec / sigma_norm_r_t
         else:
             scorec = self._score_c(vts, v0s, ts_node, wrapped_rts, with_prefector=True)
-            if self.zero_cog:
+            if self.zero_cog and self.zero_cog_score:
                 scorec = scatter_center(scorec, batch_vec)
             score = scorec + scorev
 
@@ -724,7 +727,8 @@ class TDMDiffusion(BaseDiffusion):
 
 
             if self.zero_cog:
-                score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
+                if self.zero_cog_score:
+                    score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
                 eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
 
             if self.simplified_param:
@@ -807,7 +811,8 @@ class TDMDiffusion(BaseDiffusion):
         tau_t = torch.tensor(tau, device=vt_reverse.device, dtype=vt_reverse.dtype)
         eps_v = torch.randn_like(vt_reverse)
         if self.zero_cog:
-            score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
+            if self.zero_cog_score:
+                score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
             eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
         prefactor = self._get_prefector(t_n)
         sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_n))
