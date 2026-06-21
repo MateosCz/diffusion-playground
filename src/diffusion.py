@@ -76,7 +76,7 @@ class TDMDiffusion(BaseDiffusion):
         simplified_param: bool = True,
         n_sigma_rs:int = 2000,
         zero_cog: bool = False,
-        zeor_cog_score: bool = False,
+        zero_cog_score: bool = False,
         **kwargs
         ):
         super().__init__()

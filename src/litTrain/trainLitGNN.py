@@ -10,11 +10,12 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+import wandb
 
 pt_invariant = True
 total_time = 2.0
 dim = 2
-n_epoch = 200
+n_epoch = 400
 lr = 1e-3
 base_ds_kw = "triangle"
 # base_ds_kw = "mix"
@@ -133,44 +134,59 @@ def main():
         zero_cog=nn_kwargs["zero_cog"]
     )
 
+
+
+    # ------- run lit model on WandB
+
     lit_gnn_zero_cog_score = LitVanillaGNN(
         model=gnn,
         diffusion=diffusion_zero_cog_score,
         diffusion_kwargs=diffusion_kwargs_zero_cog_score,
+        batch_size = data_kwargs["batch_size"],
         lr=lr
     )
-    lit_gnn_no_zero_cog_score = LitVanillaGNN(
-        model=gnn_no_zero_cog_score,
-        diffusion=diffusion_no_zero_cog_score,
-        diffusion_kwargs=diffusion_kwargs_no_zero_cog_score,
-        lr=lr
-    )
+    
     experiment_name_zero_cog_score = f"ptiGNN_shapes_{base_ds_kw}_zero_cog_score" if pt_invariant else f"GNN_shapes_{base_ds_kw}_zero_cog_score"
-    experiment_name_no_zero_cog_score = f"ptiGNN_shapes_{base_ds_kw}_no_zero_cog_score" if pt_invariant else f"GNN_shapes_{base_ds_kw}_no_zero_cog_score"
     wandb_logger = WandbLogger(
         name=experiment_name_zero_cog_score,
         save_dir="wandb_logs",
         project = "diffusion-playground"
+    )
+    
+    trainer = L.Trainer(
+        logger=wandb_logger,
+        max_epochs=n_epoch,
+        accelerator="gpu",
+        log_every_n_steps=32
+    )
+
+
+
+    trainer.fit(model=lit_gnn_zero_cog_score, train_dataloaders=loader)
+    wandb.finish()
+
+    experiment_name_no_zero_cog_score = f"ptiGNN_shapes_{base_ds_kw}_no_zero_cog_score" if pt_invariant else f"GNN_shapes_{base_ds_kw}_no_zero_cog_score"
+
+    lit_gnn_no_zero_cog_score = LitVanillaGNN(
+        model=gnn_no_zero_cog_score,
+        diffusion=diffusion_no_zero_cog_score,
+        diffusion_kwargs=diffusion_kwargs_no_zero_cog_score,
+        batch_size = data_kwargs["batch_size"],
+        lr=lr
     )
     wandb_logger_no_zero_cog_score = WandbLogger(
         name=experiment_name_no_zero_cog_score,
         save_dir="wandb_logs",
         project = "diffusion-playground"
     )
-    trainer = L.Trainer(
-        logger=wandb_logger,
-        max_epochs=n_epoch,
-        accelerator="gpu"
-    )
-
     trainer_no_zero_cog_score = L.Trainer(
         logger=wandb_logger_no_zero_cog_score,
         max_epochs=n_epoch,
-        accelerator="gpu"
+        accelerator="gpu",
+        log_every_n_steps=32
     )
-
-    trainer.fit(model=lit_gnn_zero_cog_score, train_dataloaders=loader)
     trainer_no_zero_cog_score.fit(model=lit_gnn_no_zero_cog_score, train_dataloaders=loader)
+    wandb.finish()
 
 
 if __name__ == "__main__":
