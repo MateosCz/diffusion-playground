@@ -1,2 +1,4 @@
 *.pyc
 __pycache__/
+wandb_logs/
+src/__pycache__/
