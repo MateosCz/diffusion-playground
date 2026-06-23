@@ -10,7 +10,9 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.callbacks import ModelCheckpoint
 import wandb
+from datetime import datetime
 
 pt_invariant = True
 total_time = 2.0
@@ -21,6 +23,12 @@ base_ds_kw = "triangle"
 # base_ds_kw = "mix"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+diffusion_kwargs_no_zero_cog = {
+    "t_dist_kw": "uniform",
+    "v0_dist_kw": "zero",
+    "zero_cog": False,
+    "zero_cog_score": False
+}
 
 diffusion_kwargs_zero_cog_score = {
     "t_dist_kw": "uniform",
@@ -67,6 +75,7 @@ data_kwargs = {
 
 
 def main():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_ds = Shapes_Dataset(
         num_points=data_kwargs["num_points"],
         dataset_size=data_kwargs["dataset_size"],
@@ -84,6 +93,13 @@ def main():
         batch_size=data_kwargs["batch_size"],
         shuffle=True
     )
+    diffusion_no_zero_cog = TDMDiffusion(
+        dim=dim,
+        integrator_type="Euler",
+        simplified_param=True,
+        zero_cog=nn_kwargs["zero_cog"],
+        zero_cog_score=diffusion_kwargs_no_zero_cog["zero_cog_score"]
+    )
 
     diffusion_zero_cog_score = TDMDiffusion(
         dim=dim,
@@ -100,7 +116,7 @@ def main():
         zero_cog_score=diffusion_kwargs_no_zero_cog_score["zero_cog_score"]
     )
 
-    gnn = TDM_VanillaGNN(
+    gnn_no_zero_cog = TDM_VanillaGNN(
         node_feat_dim=nn_kwargs["node_feat_dim"],
         edge_fourier_bands=nn_kwargs["edge_fourier_bands"],
         v_dim=nn_kwargs["v_dim"],
@@ -114,7 +130,26 @@ def main():
         only_sincos_position=nn_kwargs["only_sincos_position"],
         position_fourier_bands=nn_kwargs["position_fourier_bands"],
         pt_invariant=nn_kwargs["pt_invariant"],
-        zero_cog=nn_kwargs["zero_cog"]
+        zero_cog=nn_kwargs["zero_cog"],
+        zero_cog_score=diffusion_kwargs_no_zero_cog["zero_cog_score"]
+    )
+
+    gnn_zero_cog_score = TDM_VanillaGNN(
+        node_feat_dim=nn_kwargs["node_feat_dim"],
+        edge_fourier_bands=nn_kwargs["edge_fourier_bands"],
+        v_dim=nn_kwargs["v_dim"],
+        hidden_dim=nn_kwargs["hidden_dim"],
+        num_mp_layers=nn_kwargs["num_mp_layers"],
+        time_embedding_half_dim=nn_kwargs["time_embedding_half_dim"],
+        output_dim=nn_kwargs["output_dim"],
+        total_time=nn_kwargs["total_time"],
+        time_embedding_scale=nn_kwargs["time_embedding_scale"],
+        with_sincos_position=nn_kwargs["with_sincos_position"],
+        only_sincos_position=nn_kwargs["only_sincos_position"],
+        position_fourier_bands=nn_kwargs["position_fourier_bands"],
+        pt_invariant=nn_kwargs["pt_invariant"],
+        zero_cog=nn_kwargs["zero_cog"],
+        zero_cog_score=diffusion_kwargs_zero_cog_score["zero_cog_score"]
     )
 
     gnn_no_zero_cog_score = TDM_VanillaGNN(
@@ -131,15 +166,52 @@ def main():
         only_sincos_position=nn_kwargs["only_sincos_position"],
         position_fourier_bands=nn_kwargs["position_fourier_bands"],
         pt_invariant=nn_kwargs["pt_invariant"],
-        zero_cog=nn_kwargs["zero_cog"]
+        zero_cog=nn_kwargs["zero_cog"],
+        zero_cog_score=diffusion_kwargs_no_zero_cog_score["zero_cog_score"]
     )
 
 
 
     # ------- run lit model on WandB
 
+
+    lit_gnn_no_zero_cog = LitVanillaGNN(
+        model=gnn_no_zero_cog,
+        diffusion=diffusion_no_zero_cog,
+        diffusion_kwargs=diffusion_kwargs_no_zero_cog,
+        batch_size = data_kwargs["batch_size"],
+        lr=lr
+    )
+
+    experiment_name_no_zero_cog = f"ptiGNN_shapes_{base_ds_kw}_no_zero_cog" if pt_invariant else f"GNN_shapes_{base_ds_kw}_no_zero_cog"
+    wandb_logger_no_zero_cog = WandbLogger(
+        name=experiment_name_no_zero_cog,
+        save_dir="wandb_logs",
+        project = "diffusion-playground",
+        checkpoint_name = "nozerocog"
+    )
+    checkpoint_callback = ModelCheckpoint(
+        dirpath = f"checkpoints/{timestamp}/{experiment_name_no_zero_cog}",
+        filename = "nozerocog_{epoch:02d}-{val_loss:.4f}",
+        monitor = "val_loss",
+        mode = "min",
+        save_top_k = 1,
+        save_last = True
+    )
+
+    trainer_no_zero_cog = L.Trainer(
+        logger=wandb_logger_no_zero_cog,
+        max_epochs=n_epoch,
+        accelerator="gpu",
+        log_every_n_steps=32,
+        callbacks = [checkpoint_callback]
+    )
+
+    trainer_no_zero_cog.fit(model=lit_gnn_no_zero_cog, train_dataloaders=loader)
+    wandb.finish()
+
     lit_gnn_zero_cog_score = LitVanillaGNN(
-        model=gnn,
+        model=gnn_zero_cog_score,
         diffusion=diffusion_zero_cog_score,
         diffusion_kwargs=diffusion_kwargs_zero_cog_score,
         batch_size = data_kwargs["batch_size"],
@@ -147,22 +219,33 @@ def main():
     )
     
     experiment_name_zero_cog_score = f"ptiGNN_shapes_{base_ds_kw}_zero_cog_score" if pt_invariant else f"GNN_shapes_{base_ds_kw}_zero_cog_score"
-    wandb_logger = WandbLogger(
+    wandb_logger_zero_cog_score = WandbLogger(
         name=experiment_name_zero_cog_score,
         save_dir="wandb_logs",
-        project = "diffusion-playground"
+        project = "diffusion-playground",
+        checkpoint_name = "zerocogscore"
     )
+
+    checkpoint_callback = ModelCheckpoint(
+        dirpath = f"checkpoints/{timestamp}/{experiment_name_zero_cog_score}",
+        filename = "zerocogscore_{epoch:02d}-{val_loss:.4f}",
+        monitor = "val_loss",
+        mode = "min",
+        save_top_k = 1,
+        save_last = True
+    )   
     
-    trainer = L.Trainer(
-        logger=wandb_logger,
+    trainer_zero_cog_score = L.Trainer(
+        logger=wandb_logger_zero_cog_score,
         max_epochs=n_epoch,
         accelerator="gpu",
-        log_every_n_steps=32
+        log_every_n_steps=32,
+        callbacks = [checkpoint_callback]
     )
 
 
 
-    trainer.fit(model=lit_gnn_zero_cog_score, train_dataloaders=loader)
+    trainer_zero_cog_score.fit(model=lit_gnn_zero_cog_score, train_dataloaders=loader)
     wandb.finish()
 
     experiment_name_no_zero_cog_score = f"ptiGNN_shapes_{base_ds_kw}_no_zero_cog_score" if pt_invariant else f"GNN_shapes_{base_ds_kw}_no_zero_cog_score"
@@ -177,13 +260,23 @@ def main():
     wandb_logger_no_zero_cog_score = WandbLogger(
         name=experiment_name_no_zero_cog_score,
         save_dir="wandb_logs",
-        project = "diffusion-playground"
+        project = "diffusion-playground",
+        checkpoint_name = "zerocog_nozerocogscore"
+    )
+    checkpoint_callback = ModelCheckpoint(
+        dirpath = f"checkpoints/{timestamp}/{experiment_name_no_zero_cog_score}",
+        filename = "nozerocogscore_{epoch:02d}-{val_loss:.4f}",
+        monitor = "val_loss",
+        mode = "min",
+        save_top_k = 1,
+        save_last = True
     )
     trainer_no_zero_cog_score = L.Trainer(
         logger=wandb_logger_no_zero_cog_score,
         max_epochs=n_epoch,
         accelerator="gpu",
-        log_every_n_steps=32
+        log_every_n_steps=32,
+        callbacks = [checkpoint_callback]
     )
     trainer_no_zero_cog_score.fit(model=lit_gnn_no_zero_cog_score, train_dataloaders=loader)
     wandb.finish()
