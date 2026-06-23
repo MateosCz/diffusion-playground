@@ -132,6 +132,7 @@ class TDM_VanillaGNN(nn.Module):
         position_fourier_bands: int = 8,
         pt_invariant: bool = False,
         zero_cog: bool = False,
+        zero_cog_score: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -145,6 +146,7 @@ class TDM_VanillaGNN(nn.Module):
         self.with_sincos_position = with_sincos_position
         self.only_sincos_position = only_sincos_position
         self.zero_cog = zero_cog
+        self.zero_cog_score = zero_cog_score
         self.pt_invariant = pt_invariant
         self.node_feat_dim = node_feat_dim
         # Build list of hidden widths
@@ -287,7 +289,7 @@ class TDM_VanillaGNN(nn.Module):
 
         # --- Output ---
         score = self.output_layer(h)           # (N_total, output_dim)
-        if self.zero_cog:
+        if self.zero_cog and self.zero_cog_score:
             score = scatter_center(score, batch)
         return score
 

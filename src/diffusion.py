@@ -688,8 +688,8 @@ class TDMDiffusion(BaseDiffusion):
 
         if self.zero_cog:
             vT = scatter_center(vT, graph_T.batch)
-            fT = scatter_center(graph_T.x, graph_T.batch)
-            graph_T = self._update_graph_batch(graph_T, fT)
+            # fT = scatter_center(graph_T.x, graph_T.batch)
+            # graph_T = self._update_graph_batch(graph_T, fT)
 
         device = graph_T.x.device
         dtype = graph_T.x.dtype
@@ -727,8 +727,8 @@ class TDMDiffusion(BaseDiffusion):
 
 
             if self.zero_cog:
-                if self.zero_cog_score:
-                    score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
+                # if self.zero_cog_score:
+                #     score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
                 eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
 
             if self.simplified_param:
