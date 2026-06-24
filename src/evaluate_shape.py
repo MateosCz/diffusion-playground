@@ -83,6 +83,71 @@ def _pt_seg_dist(P, a, b):
     return np.linalg.norm(P - proj, axis=1)
  
  
+def _max_area_triangle(points):
+    """Return (a, b, c) vertices of max-area triangle on the hull points."""
+    best, tri = -1.0, None
+    for i, j, k in itertools.combinations(range(len(points)), 3):
+        a, b, c = points[i], points[j], points[k]
+        area = 0.5 * abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]))
+        if area > best:
+            best, tri = area, (a, b, c)
+    return tri
+
+
+def _triangle_from_cloud(p, L):
+    """Get canonical cloud + max-area triangle corners. Returns (q, tri) or (None, None)."""
+    q = canon(p, L)
+    if q is None:
+        return None, None
+    try:
+        hull = q[ConvexHull(q).vertices]
+    except Exception:
+        return None, None
+    if len(hull) < 3:
+        return None, None
+    tri = _max_area_triangle(hull)
+    if tri is None:
+        return None, None
+    return q, tri
+
+
+def _pt_triangle_dist(P, tri):
+    a, b, c = tri
+    return np.minimum.reduce([_pt_seg_dist(P, a, b),
+                              _pt_seg_dist(P, b, c),
+                              _pt_seg_dist(P, c, a)])
+
+
+def _rotate(P, theta):
+    ct, st = np.cos(theta), np.sin(theta)
+    R = np.array([[ct, -st], [st, ct]])
+    return P @ R.T
+
+
+def superimposed_rms_point_to_edge(p_gen, p_gt, L, n_angles=180):
+    """Align generated cloud to GT (rotation + optional mirror), then compute
+    RMS distance from generated points to GT triangle edges."""
+    q_gen = canon(p_gen, L)
+    q_gt, tri_gt = _triangle_from_cloud(p_gt, L)
+    if q_gen is None or q_gt is None or tri_gt is None:
+        return np.nan
+
+    best = np.inf
+    thetas = np.linspace(0.0, 2.0 * np.pi, n_angles, endpoint=False)
+
+    # Try no reflection and x-axis reflection in canonical coordinates.
+    for reflect in (1.0, -1.0):
+        q = q_gen.copy()
+        q[:, 0] *= reflect
+        for theta in thetas:
+            q_aligned = _rotate(q, theta)
+            d = _pt_triangle_dist(q_aligned, tri_gt)
+            rms = np.sqrt(np.mean(d ** 2))
+            if rms < best:
+                best = rms
+    return best
+
+
 def triangle_residual(p, L):
     """Mean point-to-boundary distance for the best-fit (max-area) triangle.
     Scale/rotation/translation invariant after canon(); ~0 for a clean triangle.
@@ -98,12 +163,9 @@ def triangle_residual(p, L):
         return np.nan
  
     # the 3 hull vertices enclosing the most area = triangle corners
-    best, tri = -1.0, None
-    for i, j, k in itertools.combinations(range(len(hull)), 3):
-        a, b, c = hull[i], hull[j], hull[k]
-        area = 0.5 * abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]))
-        if area > best:
-            best, tri = area, (a, b, c)
+    tri = _max_area_triangle(hull)
+    if tri is None:
+        return np.nan
  
     a, b, c = tri
     d = np.minimum.reduce([_pt_seg_dist(q, a, b),
@@ -116,6 +178,15 @@ def residuals(clouds, L, name=""):
     r = np.array([triangle_residual(c, L) for c in clouds])
     finite = np.isfinite(r)
     print(f"  [{name}] dropped {(~finite).sum()}/{len(r)} as cell-spanning/invalid")
+    return r[finite]
+
+
+def paired_superimposed_rms(gen_clouds, gt_clouds, L, name="", n_angles=180):
+    n = min(len(gen_clouds), len(gt_clouds))
+    r = np.array([superimposed_rms_point_to_edge(gen_clouds[i], gt_clouds[i], L, n_angles=n_angles)
+                  for i in range(n)])
+    finite = np.isfinite(r)
+    print(f"  [{name}] superimposed dropped {(~finite).sum()}/{len(r)} invalid pairs")
     return r[finite]
  
  
@@ -220,24 +291,45 @@ if __name__ == "__main__":
     r_b = residuals(g_b, L, name="no_zero_cog_score")
     r_c = residuals(g_c, L, name="no_zero_cog")
     r_gt = residuals(gt_clouds, L, name="GT")
+    s_a = paired_superimposed_rms(g_a, gt_clouds, L, name="zero_cog_score")
+    s_b = paired_superimposed_rms(g_b, gt_clouds, L, name="no_zero_cog_score")
+    s_c = paired_superimposed_rms(g_c, gt_clouds, L, name="no_zero_cog")
  
     # ---- report ------------------------------------------------------------
+    report_lines = []
+
+    def log(line):
+        print(line)
+        report_lines.append(line)
+
     def report(name, r, ref):
-        print(f"{name:14s}  n={len(r):3d}  median={np.median(r):.4f}  "
-              f"IQR=[{np.percentile(r, 25):.4f},{np.percentile(r, 75):.4f}]  "
-              f"W1(vs GT)={wasserstein_distance(r, ref):.4f}")
- 
-    print("\n=== triangle-fit residual (lower = more triangle-like) ===")
+        log(f"{name:14s}  n={len(r):3d}  median={np.median(r):.4f}  "
+            f"IQR=[{np.percentile(r, 25):.4f},{np.percentile(r, 75):.4f}]  "
+            f"W1(vs GT)={wasserstein_distance(r, ref):.4f}")
+
+    log("\n=== triangle-fit residual (lower = more triangle-like) ===")
     report("GT", r_gt, r_gt)
     report("zero_cog_score", r_a, r_gt)
     report("no_zero_cog_score", r_b, r_gt)
     report("no_zero_cog", r_c, r_gt)
  
-    print(f"\nKS(zero_cog_score vs no_zero_cog_score): D={ks_2samp(r_a, r_b).statistic:.3f}  "
-          f"p={ks_2samp(r_a, r_b).pvalue:.3g}")
-    print(f"KS(zero_cog_score vs GT):          D={ks_2samp(r_a, r_gt).statistic:.3f}")
-    print(f"KS(no_zero_cog_score vs GT):       D={ks_2samp(r_b, r_gt).statistic:.3f}")
-    print(f"KS(no_zero_cog vs GT):       D={ks_2samp(r_c, r_gt).statistic:.3f}")
+    log(f"\nKS(zero_cog_score vs no_zero_cog_score): D={ks_2samp(r_a, r_b).statistic:.3f}  "
+        f"p={ks_2samp(r_a, r_b).pvalue:.3g}")
+    log(f"KS(zero_cog_score vs GT):          D={ks_2samp(r_a, r_gt).statistic:.3f}")
+    log(f"KS(no_zero_cog_score vs GT):       D={ks_2samp(r_b, r_gt).statistic:.3f}")
+    log(f"KS(no_zero_cog vs GT):       D={ks_2samp(r_c, r_gt).statistic:.3f}")
+    log("\n=== superimposed RMS point-to-GT-edge (lower = better) ===")
+    log(f"zero_cog_score     n={len(s_a):3d}  median={np.median(s_a):.4f}  "
+        f"IQR=[{np.percentile(s_a, 25):.4f},{np.percentile(s_a, 75):.4f}]")
+    log(f"no_zero_cog_score  n={len(s_b):3d}  median={np.median(s_b):.4f}  "
+        f"IQR=[{np.percentile(s_b, 25):.4f},{np.percentile(s_b, 75):.4f}]")
+    log(f"no_zero_cog        n={len(s_c):3d}  median={np.median(s_c):.4f}  "
+        f"IQR=[{np.percentile(s_c, 25):.4f},{np.percentile(s_c, 75):.4f}]")
+
+    report_path = "triangle_residual_report.txt"
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines) + "\n")
+    print(f"\nsaved {report_path}")
  
     # ---- one-glance plot ---------------------------------------------------
     plt.figure(figsize=(6, 4))
@@ -252,4 +344,16 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig("triangle_residual_compare.png", dpi=150)
     print("\nsaved triangle_residual_compare.png")
+
+    plt.figure(figsize=(6, 4))
+    bins_s = np.linspace(0, max(s_a.max(), s_b.max(), s_c.max()), 40)
+    plt.hist(s_a, bins_s, alpha=.5, density=True, label="zero_cog_score")
+    plt.hist(s_b, bins_s, alpha=.5, density=True, label="no_zero_cog_score")
+    plt.hist(s_c, bins_s, alpha=.5, density=True, label="no_zero_cog")
+    plt.xlabel("superimposed RMS point-to-GT-edge")
+    plt.ylabel("density")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("triangle_superimposed_rms_compare.png", dpi=150)
+    print("saved triangle_superimposed_rms_compare.png")
  
