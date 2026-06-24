@@ -125,33 +125,46 @@ def residuals(clouds, L, name=""):
 if __name__ == "__main__":
  
     # ---- load checkpoints --------------------------------------------------
-    gnn_zero_cog_score = LitVanillaGNN.load_from_checkpoint(
-        "wandb_logs/diffusion-playground/jscl5f50/checkpoints/epoch=399-step=12800.ckpt",
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    gnn_no_zero_cog = LitVanillaGNN.load_from_checkpoint(
+        "checkpoints/20260623_173456/ptiGNN_shapes_triangle_no_zero_cog/last.ckpt",
         weights_only=False,
+        map_location=DEVICE,
+    )
+    gnn_zero_cog_score = LitVanillaGNN.load_from_checkpoint(
+        "checkpoints/20260623_173456/ptiGNN_shapes_triangle_zero_cog_score/last.ckpt",
+        weights_only=False,
+        map_location=DEVICE,
     )
     gnn_no_zero_cog_score = LitVanillaGNN.load_from_checkpoint(
-        "wandb_logs/diffusion-playground/9rveuph1/checkpoints/epoch=399-step=12800.ckpt",
+        "checkpoints/20260623_173456/ptiGNN_shapes_triangle_no_zero_cog_score/last.ckpt",
         weights_only=False,
+        map_location=DEVICE,
     )
+    gnn_no_zero_cog.eval()
     gnn_zero_cog_score.eval()
     gnn_no_zero_cog_score.eval()
  
-    # sample_backward_graph builds its prior graphs on CPU, so keep the score
-    # networks on CPU too — otherwise the CPU input hits CUDA weights and you get
-    # "Expected all tensors to be on the same device". (Eval over 300 graphs is
-    # cheap on CPU; move to CUDA only if the diffusion threads a device through.)
-    DEVICE = "cpu"
+    # Keep diffusion + score nets on the same device. sample_backward_graph
+    # creates graph/time tensors on CUDA when available.
+    gnn_no_zero_cog.to(DEVICE)
     gnn_zero_cog_score.to(DEVICE)
     gnn_no_zero_cog_score.to(DEVICE)
+
+    tdm_model_no_zero_cog = TDMDiffusion(
+        dim=2, integrator_type="Euler",
+        simplified_param=True, zero_cog=False, zero_cog_score=False,
+    ).to(DEVICE)
  
     tdm_model = TDMDiffusion(
         dim=2, integrator_type="Euler",
         simplified_param=True, zero_cog=True, zero_cog_score=True,
-    )
+    ).to(DEVICE)
     tdm_model_no_zero_cog_score = TDMDiffusion(
         dim=2, integrator_type="Euler",
         simplified_param=True, zero_cog=True, zero_cog_score=False,
-    )
+    ).to(DEVICE)
  
     # ---- sample both groups ------------------------------------------------
     graph_num = 300
@@ -178,9 +191,13 @@ if __name__ == "__main__":
     (ft_list_no, vt_list_no, t_list_no) = tdm_model_no_zero_cog_score.sample_backward_graph(
         tdm_score_fn=gnn_no_zero_cog_score.forward_from_data, **sample_kwargs
     )
+    (ft_list_no_zero_cog, vt_list_no_zero_cog, t_list_no_zero_cog) = tdm_model_no_zero_cog.sample_backward_graph(
+        tdm_score_fn=gnn_no_zero_cog.forward_from_data, **sample_kwargs
+    )
  
     f0 = ft_list[-1]                  # generated shapes at t = 0
     f0_no_zero_cog_score = ft_list_no[-1]
+    f0_no_zero_cog = ft_list_no_zero_cog[-1]
  
     # ---- ground-truth triangles -------------------------------------------
     # Shapes_Dataset returns (points, corner_mask) with points in [0, 1).
@@ -197,10 +214,11 @@ if __name__ == "__main__":
  
     g_a = split_graphs(f0, graph_nodes)                    # zero_cog_score = True
     g_b = split_graphs(f0_no_zero_cog_score, graph_nodes)  # zero_cog_score = False
- 
+    g_c = split_graphs(f0_no_zero_cog, graph_nodes)  # zero_cog = False
     print("=== validity (drop) counts ===")
-    r_a = residuals(g_a, L, name="zero_cog")
-    r_b = residuals(g_b, L, name="no_zero_cog")
+    r_a = residuals(g_a, L, name="zero_cog_score")
+    r_b = residuals(g_b, L, name="no_zero_cog_score")
+    r_c = residuals(g_c, L, name="no_zero_cog")
     r_gt = residuals(gt_clouds, L, name="GT")
  
     # ---- report ------------------------------------------------------------
@@ -211,20 +229,23 @@ if __name__ == "__main__":
  
     print("\n=== triangle-fit residual (lower = more triangle-like) ===")
     report("GT", r_gt, r_gt)
-    report("zero_cog", r_a, r_gt)
-    report("no_zero_cog", r_b, r_gt)
+    report("zero_cog_score", r_a, r_gt)
+    report("no_zero_cog_score", r_b, r_gt)
+    report("no_zero_cog", r_c, r_gt)
  
-    print(f"\nKS(zero_cog vs no_zero_cog): D={ks_2samp(r_a, r_b).statistic:.3f}  "
+    print(f"\nKS(zero_cog_score vs no_zero_cog_score): D={ks_2samp(r_a, r_b).statistic:.3f}  "
           f"p={ks_2samp(r_a, r_b).pvalue:.3g}")
-    print(f"KS(zero_cog vs GT):          D={ks_2samp(r_a, r_gt).statistic:.3f}")
-    print(f"KS(no_zero_cog vs GT):       D={ks_2samp(r_b, r_gt).statistic:.3f}")
+    print(f"KS(zero_cog_score vs GT):          D={ks_2samp(r_a, r_gt).statistic:.3f}")
+    print(f"KS(no_zero_cog_score vs GT):       D={ks_2samp(r_b, r_gt).statistic:.3f}")
+    print(f"KS(no_zero_cog vs GT):       D={ks_2samp(r_c, r_gt).statistic:.3f}")
  
     # ---- one-glance plot ---------------------------------------------------
     plt.figure(figsize=(6, 4))
-    bins = np.linspace(0, max(r_a.max(), r_b.max(), r_gt.max()), 40)
-    plt.hist(r_gt, bins, alpha=.5, density=True, label="GT")
+    bins = np.linspace(0, max(r_a.max(), r_b.max(), r_c.max(), r_gt.max()), 40)
+    # plt.hist(r_gt, bins, alpha=.5, density=True, label="GT")
     plt.hist(r_a, bins, alpha=.5, density=True, label="zero_cog_score")
     plt.hist(r_b, bins, alpha=.5, density=True, label="no_zero_cog_score")
+    plt.hist(r_c, bins, alpha=.5, density=True, label="no_zero_cog")
     plt.xlabel("triangle-fit residual")
     plt.ylabel("density")
     plt.legend()
