@@ -7,12 +7,14 @@ import torch
 import matplotlib.pyplot as plt
 from scipy.spatial import ConvexHull
 from scipy.stats import ks_2samp, wasserstein_distance
+from tqdm.auto import tqdm
  
 import lightning as L  # noqa: F401  (kept for parity with training env)
 from src.lit.litGNN import LitVanillaGNN
 from src.diffusion import TDMDiffusion
 from src.nn.vanillaGNN import TDM_VanillaGNN  # noqa: F401
 import src.data as data
+from src.device import get_default_device, module_device
  
  
 # ---------------------------------------------------------------------------
@@ -174,17 +176,19 @@ def triangle_residual(p, L):
     return d.mean()
  
  
-def residuals(clouds, L, name=""):
-    r = np.array([triangle_residual(c, L) for c in clouds])
+def residuals(clouds, L, name="", show_progress=False):
+    cloud_iter = tqdm(clouds, desc=f"{name} residuals", leave=False) if show_progress else clouds
+    r = np.array([triangle_residual(c, L) for c in cloud_iter])
     finite = np.isfinite(r)
     print(f"  [{name}] dropped {(~finite).sum()}/{len(r)} as cell-spanning/invalid")
     return r[finite]
 
 
-def paired_superimposed_rms(gen_clouds, gt_clouds, L, name="", n_angles=180):
+def paired_superimposed_rms(gen_clouds, gt_clouds, L, name="", n_angles=180, show_progress=False):
     n = min(len(gen_clouds), len(gt_clouds))
+    idx_iter = tqdm(range(n), desc=f"{name} superimposed RMS", leave=False) if show_progress else range(n)
     r = np.array([superimposed_rms_point_to_edge(gen_clouds[i], gt_clouds[i], L, n_angles=n_angles)
-                  for i in range(n)])
+                  for i in idx_iter])
     finite = np.isfinite(r)
     print(f"  [{name}] superimposed dropped {(~finite).sum()}/{len(r)} invalid pairs")
     return r[finite]
@@ -196,7 +200,8 @@ def paired_superimposed_rms(gen_clouds, gt_clouds, L, name="", n_angles=180):
 if __name__ == "__main__":
  
     # ---- load checkpoints --------------------------------------------------
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    DEVICE = get_default_device()
+    print(f"[device] selected default device: {DEVICE}")
 
     gnn_no_zero_cog = LitVanillaGNN.load_from_checkpoint(
         "checkpoints/20260623_173456/ptiGNN_shapes_triangle_no_zero_cog/last.ckpt",
@@ -236,6 +241,13 @@ if __name__ == "__main__":
         dim=2, integrator_type="Euler",
         simplified_param=True, zero_cog=True, zero_cog_score=False,
     ).to(DEVICE)
+
+    print(f"[device] gnn_no_zero_cog: {module_device(gnn_no_zero_cog)}")
+    print(f"[device] gnn_zero_cog_score: {module_device(gnn_zero_cog_score)}")
+    print(f"[device] gnn_no_zero_cog_score: {module_device(gnn_no_zero_cog_score)}")
+    print(f"[device] tdm_model: {module_device(tdm_model)}")
+    print(f"[device] tdm_model_no_zero_cog_score: {module_device(tdm_model_no_zero_cog_score)}")
+    print(f"[device] tdm_model_no_zero_cog: {module_device(tdm_model_no_zero_cog)}")
  
     # ---- sample both groups ------------------------------------------------
     graph_num = 300
@@ -254,16 +266,26 @@ if __name__ == "__main__":
         predictor_corrector_n_steps=20,
         only_correct_vt=True,
         tau=1e-2,
+        verbose_device=True,
     )
  
     (ft_list, vt_list, t_list) = tdm_model.sample_backward_graph(
-        tdm_score_fn=gnn_zero_cog_score.forward_from_data, **sample_kwargs
+        tdm_score_fn=gnn_zero_cog_score.forward_from_data,
+        progress=True,
+        progress_desc="sample zero_cog_score",
+        **sample_kwargs
     )
     (ft_list_no, vt_list_no, t_list_no) = tdm_model_no_zero_cog_score.sample_backward_graph(
-        tdm_score_fn=gnn_no_zero_cog_score.forward_from_data, **sample_kwargs
+        tdm_score_fn=gnn_no_zero_cog_score.forward_from_data,
+        progress=True,
+        progress_desc="sample no_zero_cog_score",
+        **sample_kwargs
     )
     (ft_list_no_zero_cog, vt_list_no_zero_cog, t_list_no_zero_cog) = tdm_model_no_zero_cog.sample_backward_graph(
-        tdm_score_fn=gnn_no_zero_cog.forward_from_data, **sample_kwargs
+        tdm_score_fn=gnn_no_zero_cog.forward_from_data,
+        progress=True,
+        progress_desc="sample no_zero_cog",
+        **sample_kwargs
     )
  
     f0 = ft_list[-1]                  # generated shapes at t = 0
@@ -276,7 +298,7 @@ if __name__ == "__main__":
     # the model is sampled in, and every source shares one period L = 2*pi.
     gt_ds = data.Shapes_Dataset(shape_types=["triangle"], num_points=64, seed=0)
     gt_clouds = []
-    for i in range(min(graph_num, len(gt_ds))):
+    for i in tqdm(range(min(graph_num, len(gt_ds))), desc="prepare GT clouds", leave=False):
         pts, _corner_mask = gt_ds[i]                        # (N, 2) in [0, 1)
         gt_clouds.append(_to_np(data.pos_to_angle(pts)))    # -> [-pi, pi)
  
@@ -287,13 +309,13 @@ if __name__ == "__main__":
     g_b = split_graphs(f0_no_zero_cog_score, graph_nodes)  # zero_cog_score = False
     g_c = split_graphs(f0_no_zero_cog, graph_nodes)  # zero_cog = False
     print("=== validity (drop) counts ===")
-    r_a = residuals(g_a, L, name="zero_cog_score")
-    r_b = residuals(g_b, L, name="no_zero_cog_score")
-    r_c = residuals(g_c, L, name="no_zero_cog")
-    r_gt = residuals(gt_clouds, L, name="GT")
-    s_a = paired_superimposed_rms(g_a, gt_clouds, L, name="zero_cog_score")
-    s_b = paired_superimposed_rms(g_b, gt_clouds, L, name="no_zero_cog_score")
-    s_c = paired_superimposed_rms(g_c, gt_clouds, L, name="no_zero_cog")
+    r_a = residuals(g_a, L, name="zero_cog_score", show_progress=True)
+    r_b = residuals(g_b, L, name="no_zero_cog_score", show_progress=True)
+    r_c = residuals(g_c, L, name="no_zero_cog", show_progress=True)
+    r_gt = residuals(gt_clouds, L, name="GT", show_progress=True)
+    s_a = paired_superimposed_rms(g_a, gt_clouds, L, name="zero_cog_score", show_progress=True)
+    s_b = paired_superimposed_rms(g_b, gt_clouds, L, name="no_zero_cog_score", show_progress=True)
+    s_c = paired_superimposed_rms(g_c, gt_clouds, L, name="no_zero_cog", show_progress=True)
  
     # ---- report ------------------------------------------------------------
     report_lines = []
@@ -334,12 +356,13 @@ if __name__ == "__main__":
     # ---- one-glance plot ---------------------------------------------------
     plt.figure(figsize=(6, 4))
     bins = np.linspace(0, max(r_a.max(), r_b.max(), r_c.max(), r_gt.max()), 40)
-    # plt.hist(r_gt, bins, alpha=.5, density=True, label="GT")
-    plt.hist(r_a, bins, alpha=.5, density=True, label="zero_cog_score")
-    plt.hist(r_b, bins, alpha=.5, density=True, label="no_zero_cog_score")
-    plt.hist(r_c, bins, alpha=.5, density=True, label="no_zero_cog")
+    # Outline-style histograms are easier to compare when distributions overlap.
+    plt.hist(r_a, bins, density=True, histtype="step", linewidth=2, label="zero_cog_score")
+    plt.hist(r_b, bins, density=True, histtype="step", linewidth=2, label="no_zero_cog_score")
+    plt.hist(r_c, bins, density=True, histtype="step", linewidth=2, label="no_zero_cog")
     plt.xlabel("triangle-fit residual")
     plt.ylabel("density")
+    plt.grid(alpha=0.2)
     plt.legend()
     plt.tight_layout()
     plt.savefig("triangle_residual_compare.png", dpi=150)
@@ -347,11 +370,12 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(6, 4))
     bins_s = np.linspace(0, max(s_a.max(), s_b.max(), s_c.max()), 40)
-    plt.hist(s_a, bins_s, alpha=.5, density=True, label="zero_cog_score")
-    plt.hist(s_b, bins_s, alpha=.5, density=True, label="no_zero_cog_score")
-    plt.hist(s_c, bins_s, alpha=.5, density=True, label="no_zero_cog")
+    plt.hist(s_a, bins_s, density=True, histtype="step", linewidth=2, label="zero_cog_score")
+    plt.hist(s_b, bins_s, density=True, histtype="step", linewidth=2, label="no_zero_cog_score")
+    plt.hist(s_c, bins_s, density=True, histtype="step", linewidth=2, label="no_zero_cog")
     plt.xlabel("superimposed RMS point-to-GT-edge")
     plt.ylabel("density")
+    plt.grid(alpha=0.2)
     plt.legend()
     plt.tight_layout()
     plt.savefig("triangle_superimposed_rms_compare.png", dpi=150)

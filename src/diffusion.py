@@ -14,6 +14,8 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch_geometric.utils import scatter
 from src.data import make_random_graph, scatter_center
+from src.device import module_device
+from tqdm.auto import tqdm
 
 
 
@@ -625,6 +627,9 @@ class TDMDiffusion(BaseDiffusion):
         vT_prior_scale: float = 1.0,
         annealing_gamma: float = 1.0,
         debug: bool = False,
+        verbose_device: bool = False,
+        progress: bool = False,
+        progress_desc: Optional[str] = None,
         seed: Optional[int] = None,
         **kwargs
     ):
@@ -668,27 +673,41 @@ class TDMDiffusion(BaseDiffusion):
 
         assert fT_prior_kw in ["stdGauss", "uniform"]
         assert vT_prior_kw in ["stdGauss", "uniform"]
-        if torch.cuda.is_available():
-            device = "cuda"
-        else:
-            device = "cpu"
+        device = module_device(self)
         dtype = torch.float32
         if seed is not None:
             generator = torch.Generator().manual_seed(seed)
         else:
             generator = None
 
-        graph_list = [make_random_graph(num_nodes, data_dim, scale_range=(-torch.pi, torch.pi), seed=seed, device=device) for num_nodes in graph_nodes]
+        graph_list = [
+            make_random_graph(
+                num_nodes,
+                data_dim,
+                scale_range=(-torch.pi, torch.pi),
+                seed=seed,
+                device=device,
+            )
+            for num_nodes in graph_nodes
+        ]
         total_nodes = sum(num_nodes for num_nodes in graph_nodes)
         loader = PyGDataLoader(graph_list, batch_size=len(graph_nodes), shuffle=False)
         graph_T = next(iter(loader))
+        graph_T = graph_T.to(device)
 
         if vT_prior_kw == "stdGauss":
             vT = torch.randn(size=(total_nodes, data_dim), device=device, dtype=dtype, generator=generator) * vT_prior_scale
         else:
             vT = torch.rand(size=(total_nodes, data_dim), device=device, dtype=dtype, generator=generator)
 
-        
+        if verbose_device:
+            print(
+                "[sample_backward_graph] "
+                f"module_device={module_device(self)}, "
+                f"graph_x_device={graph_T.x.device}, "
+                f"graph_batch_device={graph_T.batch.device}, "
+                f"vT_device={vT.device}"
+            )
 
         if self.zero_cog:
             vT = scatter_center(vT, graph_T.batch)
@@ -718,7 +737,16 @@ class TDMDiffusion(BaseDiffusion):
         t_list.append(float(t_reverse_list[0, 0, 0].item()))
         sigma_list.append(float(self.sde.sigma_t(t_reverse_list[:, 0])[0, 0].item()))
 
-        for i in range(n_steps - 1):
+        step_iter = range(n_steps - 1)
+        if progress:
+            step_iter = tqdm(
+                step_iter,
+                total=n_steps - 1,
+                desc=progress_desc or "reverse steps",
+                leave=False,
+            )
+
+        for i in step_iter:
             # per-graph time: (num_graphs, 1)
             t_g = t_reverse_list[:, i, :]       # (num_graphs, 1)
             t_g_next = t_reverse_list[:, i + 1, :]

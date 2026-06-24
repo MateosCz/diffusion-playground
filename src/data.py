@@ -76,6 +76,10 @@ def wrapped_diff(a, b):
 
 # scatter center the data by subgraph's mean
 def scatter_center(x, idx):
+    if idx.device != x.device:
+        idx = idx.to(x.device)
+    if idx.dtype != torch.long:
+        idx = idx.long()
     centers = scatter(x, idx, dim=0, reduce="mean")
     centers = centers[idx]
     return x - centers

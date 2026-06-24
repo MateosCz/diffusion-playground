@@ -13,6 +13,7 @@ from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 import wandb
 from datetime import datetime
+from src.device import get_default_device, get_lightning_accelerator
 
 pt_invariant = True
 total_time = 2.0
@@ -22,7 +23,8 @@ lr = 1e-3
 base_ds_kw = "triangle"
 # base_ds_kw = "mix"
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = get_default_device()
+accelerator = get_lightning_accelerator(device)
 diffusion_kwargs_no_zero_cog = {
     "t_dist_kw": "uniform",
     "v0_dist_kw": "zero",
@@ -202,7 +204,7 @@ def main():
     trainer_no_zero_cog = L.Trainer(
         logger=wandb_logger_no_zero_cog,
         max_epochs=n_epoch,
-        accelerator="gpu",
+        accelerator=accelerator,
         log_every_n_steps=32,
         callbacks = [checkpoint_callback]
     )
@@ -238,7 +240,7 @@ def main():
     trainer_zero_cog_score = L.Trainer(
         logger=wandb_logger_zero_cog_score,
         max_epochs=n_epoch,
-        accelerator="gpu",
+        accelerator=accelerator,
         log_every_n_steps=32,
         callbacks = [checkpoint_callback]
     )
@@ -274,7 +276,7 @@ def main():
     trainer_no_zero_cog_score = L.Trainer(
         logger=wandb_logger_no_zero_cog_score,
         max_epochs=n_epoch,
-        accelerator="gpu",
+        accelerator=accelerator,
         log_every_n_steps=32,
         callbacks = [checkpoint_callback]
     )

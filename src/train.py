@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
 from src.scoreNN import TDM_SimpleScoreMLP
 from src.diffusion import TDMDiffusion
+from src.device import get_default_device
 
 
 def time_loss_weight(t, total_time):
@@ -148,7 +149,7 @@ def main():
     # -----------------------
     # Config (simple defaults)
     # -----------------------
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_default_device()
     batch_size = 512
     n_epoch = 2000
     lr = 8e-4

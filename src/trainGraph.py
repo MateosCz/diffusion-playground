@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset, Shapes_Dataset, PyGGraphWrapper
 from src.nn.vanillaGNN import TDM_VanillaGNN
 from src.diffusion import TDMDiffusion
+from src.device import get_default_device
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
 def time_loss_weight(t, total_time):
@@ -159,7 +160,7 @@ def main():
     # -----------------------
     # Config (simple defaults)
     # -----------------------
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_default_device()
     batch_size = 32
     n_epoch = 200
     lr = 1e-3
