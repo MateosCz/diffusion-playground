@@ -3,7 +3,7 @@ from torch import nn
 from typing import Optional, Literal
 from abc import ABC, abstractmethod
 
-from src.data import wrap_angle
+from src.dataLib.synthetic import wrap_angle
 import math
 
 class BaseDistribution(ABC,nn.Module):

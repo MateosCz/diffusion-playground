@@ -1,0 +1,141 @@
+import torch
+from torch_geometric.utils import scatter
+from torch_geometric.data import Data
+
+
+import json
+from pathlib import Path
+from typing import Sequence, Union
+
+import ase.io
+import numpy as np
+from ase.atoms import Atoms
+
+
+"""
+data processing helpers
+"""
+
+def so2mat_to_pos(so2matrix):
+    """
+    recover fractional coordinates from so2 matrix
+    """
+    theta = torch.sign(so2matrix[...,0,1]) * torch.arccos(so2matrix[...,0,0])
+    x = (theta/(2 * torch.pi)+ 0.5) * (1-0)
+    return x
+
+def so2mat_to_angle(so2matrix):
+    """
+    recover theta(angle) from so2 matrix 
+    """
+    theta = torch.sign(so2matrix[...,0,1]) * torch.arccos(so2matrix[...,0,0])
+    return theta
+
+def angle_to_pos(theta, a=0, b=1):
+    """Map theta from [-pi, pi] to x in [a, b]."""
+    x = (theta / (2 * torch.pi) + 0.5) * (b - a) + a
+    return x
+
+def pos_to_angle(x, a=0,b=1):
+    """
+    Map x from [a,b) to theta [-pi,pi)
+    """
+    theta = 2 * torch.pi * (x - a) / (b - a) - torch.pi
+    return theta
+
+def theta_to_so2mat(theta):
+    """Construct SO(2) representation g from θ."""
+    cos_t = torch.cos(theta)
+    sin_t = torch.sin(theta)
+    g = torch.stack([
+        torch.stack([cos_t, sin_t], dim=-1),
+        torch.stack([-sin_t, cos_t], dim=-1),
+    ], dim=-2)
+    return g
+
+def torus_embedding(theta1: torch.Tensor, theta2: torch.Tensor, R:float = 3.0, r: float = 1.0):
+    """construct the torus embedding for SO(2)xSO(2) data"""
+    x = (R + r * torch.cos(theta2)) * torch.cos(theta1)
+    y = (R + r * torch.cos(theta2)) * torch.sin(theta1)
+    z = r * torch.sin(theta2)
+    return torch.stack([x,y,z], dim=-1)
+
+"""
+Wrap periodic fractional-coordinate-like data from R to [-pi,pi]
+"""
+def wrap_pos(x, x_range:float = 1.0):
+    wrapped_x = torch.arctan2(torch.sin(x_range * x), torch.cos(x_range * x)) / x_range
+    return wrapped_x
+
+"""wrap periodic angle-like data x from [theta,theta+2kpi](or R) to [-pi,pi]""" 
+def wrap_angle(x):
+    wrapped_x = torch.arctan2(torch.sin(x), torch.cos(x))
+    return wrapped_x
+
+
+
+def wrap_01(x):
+    return torch.remainder(x, 1.0)   # equivalent to x % 1.0, maps to [0, 1)
+
+def wrapped_diff(a, b):
+    """Signed angular difference a - b, wrapped to [-pi, pi)."""
+    return torch.remainder(a - b + torch.pi, 2 * torch.pi) - torch.pi
+
+# scatter center the data by subgraph's mean
+def scatter_center(x, idx):
+    if idx.device != x.device:
+        idx = idx.to(x.device)
+    if idx.dtype != torch.long:
+        idx = idx.long()
+    centers = scatter(x, idx, dim=0, reduce="mean")
+    centers = centers[idx]
+    return x - centers
+
+
+def read_json(json_path: str | Path):
+    with open(json_path, encoding="utf-8", mode="r") as fp:
+        return json.load(fp)
+
+
+def save_json(json_dict: dict, json_path: str, sort_keys: bool = False):
+    def _fix_dict():
+        for key in json_dict:
+            if isinstance(json_dict[key], np.ndarray):
+                json_dict[key] = json_dict[key].tolist()
+
+    _fix_dict()
+    with open(json_path, encoding="utf-8", mode="w") as fp:
+        json.dump(json_dict, fp, sort_keys=sort_keys)
+
+
+def save_images(
+        images: Sequence[ase.Atoms], filename: Union[str, Path], fmt: str = "extxyz"
+):
+    ase.io.write(filename=filename, images=images, format=fmt)
+
+def PyGData_to_Structure(data: Data):
+    from src.dataLib.preprocessCSV import lattice_params_to_matrix
+    from pymatgen.core import Lattice, Structure
+
+    angles = torch.as_tensor(data.angles).detach().cpu().view(-1).numpy()
+    lengths = torch.as_tensor(data.lengths).detach().cpu().view(-1).numpy()
+    # Diffusion samples live in angle space; pymatgen expects fractional coords.
+    frac_coords = angle_to_pos(wrap_angle(torch.as_tensor(data.x))).detach().cpu().numpy()
+    numbers = torch.as_tensor(data.h).detach().cpu().numpy()
+    lattice = lattice_params_to_matrix(*lengths, *angles)
+
+    return Structure(
+        lattice=Lattice(lattice),
+        species=numbers,
+        coords=frac_coords,
+        coords_are_cartesian=False,
+    )
+
+
+def PyGData_to_AseAtoms(data: Data):
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    structure = PyGData_to_Structure(data)
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+    atoms.pbc = True
+    return atoms

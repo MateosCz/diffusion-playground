@@ -7,13 +7,13 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence, Callable, Tuple
 from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
-from src.data import pos_to_angle, wrap_angle, wrap_pos, wrapped_diff
+from src.dataLib.synthetic import pos_to_angle, wrap_angle, wrap_pos, wrapped_diff
 from src.distribution import WrappedNormalDistribution, sigma_norm
 import math
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch_geometric.utils import scatter
-from src.data import make_random_graph, scatter_center
+from src.dataLib.synthetic import make_random_graph, scatter_center
 from src.device import module_device
 from tqdm.auto import tqdm
 
