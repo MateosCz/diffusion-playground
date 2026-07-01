@@ -11,7 +11,7 @@ from tqdm.auto import tqdm
  
 import lightning as L  # noqa: F401  (kept for parity with training env)
 from src.lit.litGNN import LitVanillaGNN
-from src.diffusion import TDMDiffusion
+from src.diffusion.tdm import TDMDiffusion
 from src.nn.vanillaGNN import TDM_VanillaGNN  # noqa: F401
 import src.dataLib.synthetic as data
 from src.device import get_default_device, module_device

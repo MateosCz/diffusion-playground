@@ -1,6 +1,6 @@
 from src.lit.litGNN import LitVanillaGNN
 from src.nn.vanillaGNN import TDM_VanillaGNN
-from src.diffusion import TDMDiffusion
+from src.diffusion.tdm import TDMDiffusion
 from src.trainGraph import weighted_score_loss
 from src.dataLib.synthetic import Shapes_Dataset, PyGGraphWrapper
 from torch_geometric.loader import DataLoader as PyGDataLoader

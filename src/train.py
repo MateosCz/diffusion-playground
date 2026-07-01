@@ -6,7 +6,7 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
 from src.scoreNN import TDM_SimpleScoreMLP
-from src.diffusion import TDMDiffusion
+from src.diffusion.tdm import TDMDiffusion
 from src.device import get_default_device
 
 

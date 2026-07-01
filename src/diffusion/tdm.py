@@ -6,7 +6,7 @@ from torch import nn
 import torch
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Literal, Sequence, Callable, Tuple
-from src.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
+from src.diffusion.sde import VPSDE, BaseSDE, BaseSDEIntegrator, EulerIntegrator, LinearSchedule
 from src.dataLib.synthetic import pos_to_angle, wrap_angle, wrap_pos, wrapped_diff
 from src.distribution import WrappedNormalDistribution, sigma_norm
 import math
@@ -16,44 +16,8 @@ from torch_geometric.utils import scatter
 from src.dataLib.synthetic import make_random_graph, scatter_center
 from src.device import module_device
 from tqdm.auto import tqdm
+from src.diffusion.base import BaseDiffusion
 
-
-
-"""
-Base class of diffusions, including the 
-"""
-class BaseDiffusion(ABC, nn.Module):
-    
-    """
-    the loss function of DSM, given predicted score, target result and time t.
-    """
-    @abstractmethod
-    def loss_diffusion(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        t: torch.Tensor
-    ):
-        raise NotImplementedError
-
-
-    """
-    inference step throw the time reversed diffusion 
-    """
-    @torch.inference_mode()
-    def reverse_step(
-            self,
-            t: torch.Tensor,
-            x_t: torch.Tensor,
-            pred: torch.Tensor,
-            dt: torch.Tensor,
-            **_,
-    ):
-        raise NotImplementedError
-
-    @torch.inference_mode()
-    def sample_prior(self, index: torch.Tensor):
-        raise NotImplementedError
 
     
 """
@@ -825,6 +789,7 @@ class TDMDiffusion(BaseDiffusion):
         if sample_trajectory:
             return ft_traj, vt_traj, t_arr
         return ft_reverse, vt_reverse
+
 
     def _langevin_corrector_step_graph(
         self,

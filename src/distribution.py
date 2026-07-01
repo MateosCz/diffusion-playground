@@ -45,7 +45,6 @@ class WrappedNormalDistribution():
             
 
 
-
 def sigma_norm(sigma: torch.Tensor, T: float = 2 * torch.pi, N: int = 10, sn: int = 20000):
     
     sigmas = sigma[None, :].repeat(sn, 1)
