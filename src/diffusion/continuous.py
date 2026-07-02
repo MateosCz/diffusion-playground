@@ -15,6 +15,8 @@ class ContinuousDiffusion(BaseDiffusion):
         super().__init__()
         self.sde = sde
         self.integrator = EulerIntegrator(sde=sde)
+        self.total_time = total_time
+        self.parameterization = parameterization
 
     def sample_forward(
         self,

@@ -117,8 +117,19 @@ def PyGData_to_Structure(data: Data):
     from src.dataLib.preprocessCSV import lattice_params_to_matrix
     from pymatgen.core import Lattice, Structure
 
-    angles = torch.as_tensor(data.angles).detach().cpu().view(-1).numpy()
-    lengths = torch.as_tensor(data.lengths).detach().cpu().view(-1).numpy()
+    # The lattice is diffused as the concatenated vector `l` = [lengths, angles],
+    # while `lengths`/`angles` keep their original (unnoised) values. Prefer `l`
+    # so noised samples reflect the updated lattice; fall back to the split keys.
+    if getattr(data, "l", None) is not None:
+        l = torch.as_tensor(data.l).detach().cpu().view(-1)
+        log_lengths, tan_angles = l[:3], l[3:]
+    else:
+        log_lengths = torch.as_tensor(data.lengths).detach().cpu().view(-1)
+        tan_angles = torch.as_tensor(data.angles).detach().cpu().view(-1)
+    # Lengths are stored as log(l) (ContinuousIntervalLengths); invert to Angstrom.
+    lengths = torch.exp(log_lengths).numpy()
+    # Angles are stored as tan(theta_rad - pi/2) (ContinuousIntervalAngles); invert to degrees.
+    angles = torch.rad2deg(torch.arctan(tan_angles) + torch.pi / 2.0).numpy()
     # Diffusion samples live in angle space; pymatgen expects fractional coords.
     frac_coords = angle_to_pos(wrap_angle(torch.as_tensor(data.x))).detach().cpu().numpy()
     numbers = torch.as_tensor(data.h).detach().cpu().numpy()
