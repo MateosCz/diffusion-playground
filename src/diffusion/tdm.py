@@ -361,6 +361,72 @@ class TDMDiffusion(BaseDiffusion):
 
             else:
                 return ft_reverse, vt_reverse
+
+    def backward_vstep_euler(
+        self,
+        vt_reverse,
+        t_reverse,
+        dt: torch.Tensor,
+        score: torch.Tensor,
+        probability_flow: bool = False,
+    ):
+        device, dtype = vt_reverse.device, vt_reverse.dtype
+        eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+        if self.simplified_param:
+            prefactor = self._get_prefector(t_reverse)
+            sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_reverse))
+            sigma_v = self.sde.sigma_t(t_reverse)
+            scorev_reverse = score * prefactor * sigma_norm_r_t - vt_reverse / (sigma_v**2)
+        else:
+            scorev_reverse = score
+        
+        if probability_flow:
+            vt_reverse = vt_reverse - (-vt_reverse - scorev_reverse) * dt
+        else:
+            vt_reverse = vt_reverse - (-vt_reverse - 2 * scorev_reverse) * dt + torch.sqrt(2 * dt) * eps_v
+        
+
+        return vt_reverse
+
+    def backward_fstep(
+        self,
+        ft_reverse,
+        vt_reverse,
+        dt: torch.Tensor,
+    ):
+        ft_reverse = ft_reverse - dt * vt_reverse
+        ft_reverse = wrap_angle(ft_reverse)
+        return ft_reverse
+
+    def backward_vstep_exp(
+        self,
+        vt_reverse,
+        t_reverse,
+        dt: torch.Tensor,
+        score: torch.Tensor,
+        probability_flow: bool = False,
+    ):
+        device, dtype = vt_reverse.device, vt_reverse.dtype
+        eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+        if self.simplified_param:
+            prefactor = self._get_prefector(t_reverse)
+            sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_reverse))
+            sigma_v = self.sde.sigma_t(t_reverse)
+            scorev_reverse = score * prefactor * sigma_norm_r_t - vt_reverse / (sigma_v**2)
+        else:
+            scorev_reverse = score
+        if probability_flow:
+            vt_reverse = (torch.exp(dt) * vt_reverse +
+                                    torch.expm1(dt) * scorev_reverse)
+        else:
+            vt_reverse = (torch.exp(dt) * vt_reverse +
+                                2 * (torch.expm1(dt)) * scorev_reverse + 
+                                torch.sqrt(torch.expm1(2 * dt)) * eps_v)
+
+        return vt_reverse
+
+
+        
         
     
     
@@ -727,14 +793,7 @@ class TDMDiffusion(BaseDiffusion):
                 #     score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
                 eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
 
-            if self.simplified_param:
-                prefactor = self._get_prefector(t_n)                # (N_total, 1)
-                sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_n))
-                sigma_v = self.sde.sigma_t(t_n)
-                scorev_reverse = (score_learned * prefactor * sigma_norm_r_t
-                                  - vt_reverse / (sigma_v ** 2))
-            else:
-                scorev_reverse = score_learned
+            scorev_reverse = self._construct_scorev(score_learned, vt_reverse, t_n)
 
             # --- velocity update ---
             if predictor_corrector or probability_flow:
@@ -761,16 +820,18 @@ class TDMDiffusion(BaseDiffusion):
             if predictor_corrector and i < n_steps - 2:
                 corr_step_size = tau * t_g_next ** 2 / self.total_time ** 2  # (num_graphs,1)
                 for _ in range(predictor_corrector_n_steps):
+                    score_learned = tdm_score_fn(graph, vt_reverse, t_g)   # (N_total, dim)
+                    scorev_reverse = self._construct_scorev(score_learned, vt_reverse, t_n) # update scorev after the v has updated
                     if not only_correct_vt:
                         ft_reverse, vt_reverse = self._langevin_corrector_step_graph(
-                            graph, vt_reverse, t_g, batch_vec, dt,
-                            tdm_score_fn, tau=float(corr_step_size.mean().item()),
+                            graph, vt_reverse, t_n, batch_vec, dt,
+                            scorev_reverse, tau=float(corr_step_size.mean().item()),
                         )
                         graph = self._update_graph_batch(graph, ft_reverse)
                     else:
                         vt_reverse = self._langevin_corrector_step_graph(
-                            graph, vt_reverse, t_g, batch_vec, dt,
-                            tdm_score_fn, tau=float(corr_step_size.mean().item()),
+                            graph, vt_reverse, t_n, batch_vec, dt,
+                            scorev_reverse, tau=float(corr_step_size.mean().item()),
                             only_correct_vt=True,
                         )
 
@@ -790,33 +851,101 @@ class TDMDiffusion(BaseDiffusion):
             return ft_traj, vt_traj, t_arr
         return ft_reverse, vt_reverse
 
+    def backward_vstep_euler_graph(
+        self,
+        vt_reverse: torch.Tensor,
+        t_n: torch.Tensor, # (N_total, 1) time for each node
+        batch_vec: torch.Tensor,
+        dt: torch.Tensor,
+        score: torch.Tensor, # precomputed scorev
+        probability_flow: bool = False,
+    ):
+        """
+        Euler velocity step for graph batches.
+        """
+        device, dtype = vt_reverse.device, vt_reverse.dtype
+        eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+        if self.zero_cog:
+            eps_v = scatter_center(eps_v, batch_vec)
+        if probability_flow:
+            vt_reverse = vt_reverse - (-vt_reverse - score) * dt
+        else:
+            vt_reverse = vt_reverse - (-vt_reverse - 2 * score) * dt + torch.sqrt(2 * dt) * eps_v
+        return vt_reverse
+
+
+    def backward_vstep_exp_graph(
+        self,
+        vt_reverse: torch.Tensor,
+        t_n: torch.Tensor, # (N_total, 1) time for each node
+        batch_vec: torch.Tensor,
+        dt: torch.Tensor,
+        score: torch.Tensor, # precomputed scorev
+        probability_flow: bool = False,
+    ):
+        """
+        Exponential-integrator velocity step for graph batches.
+
+        Parameters
+        ----------
+        vt_reverse : (N_total, D)
+            Node-level velocities.
+        t_g : (num_graphs, 1)
+            One reverse-time value per graph.
+        batch_vec : (N_total,)
+            Graph membership index for each node.
+        dt : scalar tensor
+        score : (N_total, D)
+            Node-level learned score (already selected/preprocessed upstream).
+        """
+        device, dtype = vt_reverse.device, vt_reverse.dtype
+        eps_v = torch.randn(size=vt_reverse.shape, device=device, dtype=dtype)
+        if self.zero_cog:
+            eps_v = scatter_center(eps_v, batch_vec)
+
+        if probability_flow:
+            vt_reverse = (
+                torch.exp(dt) * vt_reverse
+                + torch.expm1(dt) * score
+            )
+        else:
+            vt_reverse = (
+                torch.exp(dt) * vt_reverse
+                + 2 * torch.expm1(dt) * score
+                + torch.sqrt(torch.expm1(2 * dt)) * eps_v
+            )
+
+        return vt_reverse
+
+    def backward_fstep_graph(
+        self,
+        ft_reverse: torch.Tensor,
+        vt_reverse: torch.Tensor,
+        dt: torch.Tensor,
+    ):
+        ft_reverse = ft_reverse - dt * vt_reverse
+        ft_reverse = wrap_angle(ft_reverse)
+        return ft_reverse
+
 
     def _langevin_corrector_step_graph(
         self,
         graph: Data,
         vt_reverse: torch.Tensor,
-        t_g: torch.Tensor,
+        t_n: torch.Tensor, # (N_total, 1) time for each node
         batch_vec: torch.Tensor,
         dt: torch.Tensor,
-        score_fn: Callable[[Data, torch.Tensor, torch.Tensor], torch.Tensor],
+        score: torch.Tensor, # (N_total, 2) score for each node
         tau: float = 0.25,
         only_correct_vt: bool = False,
     ):
         """Langevin corrector step operating on node-level tensors."""
-        t_n = t_g[batch_vec]                                       # (N_total, 1)
-        score_learned = score_fn(graph, vt_reverse, t_g)           # (N_total, 2)
+        
         tau_t = torch.tensor(tau, device=vt_reverse.device, dtype=vt_reverse.dtype)
         eps_v = torch.randn_like(vt_reverse)
         if self.zero_cog:
-            if self.zero_cog_score:
-                score_learned = scatter_center(score_learned, batch_vec) # remove translational motion of score
             eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
-        prefactor = self._get_prefector(t_n)
-        sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t_n))
-        sigma_v = self.sde.sigma_t(t_n)
-        scorev_reverse = (score_learned * prefactor * sigma_norm_r_t
-                          - vt_reverse / (sigma_v ** 2))
-        vt_reverse = vt_reverse + tau_t * scorev_reverse + torch.sqrt(2 * tau_t) * eps_v
+        vt_reverse = vt_reverse + tau_t * score + torch.sqrt(2 * tau_t) * eps_v
         if not only_correct_vt:
             ft_reverse = wrap_angle(graph.x - dt * vt_reverse)
             return ft_reverse, vt_reverse
@@ -839,3 +968,13 @@ class TDMDiffusion(BaseDiffusion):
         # center the graph sample
         graph.x = graph.x - scatter(graph.x, graph.batch, dim=0, reduce="mean")
         return graph
+
+    def _construct_scorev(self, score, vt, t):
+        if self.simplified_param:
+            prefactor = self._get_prefector(t)
+            sigma_norm_r_t = torch.sqrt(self._sigma_norm_t(t))
+            sigma_v = self.sde.sigma_t(t)
+            scorev = score * prefactor * sigma_norm_r_t - vt / (sigma_v**2)
+        else:
+            scorev = score
+        return scorev
