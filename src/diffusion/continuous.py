@@ -3,7 +3,7 @@ from src.diffusion.sde import BaseSDE, VPSDE, EulerIntegrator
 import torch
 import torch.nn as nn
 from typing import Literal, Callable, Optional
-
+from typing import Tuple
 
 class ContinuousDiffusion(BaseDiffusion):
     def __init__(
@@ -53,9 +53,9 @@ class ContinuousDiffusion(BaseDiffusion):
                 ts = constant_t * torch.ones(size=(batch_size,1), device=device, dtype=dtype)
         expanded_ts = self._expand_time_to_x(ts, x0)
         # sample the noised data
-        xt = self._sample_xt(x0, expanded_ts)
+        xt, eps = self._sample_xt_eps(x0, expanded_ts)
         # compute the score of the noised data
-        target = self._compute_target(x0, xt, expanded_ts)
+        target = self._compute_target(x0, xt, eps, expanded_ts)
 
         # return the noised data and the score
         if return_time:
@@ -63,8 +63,28 @@ class ContinuousDiffusion(BaseDiffusion):
         else:
             return xt, target
 
+    def construct_score(
+        self, 
+        t: torch.Tensor,
+        xt: torch.Tensor,
+        pred: torch.Tensor) -> torch.Tensor: # construct score at time t from predicted target and the noised data
+        mean_t_coeff = self.sde.mean_t_coeff(t)
+        sigma_t = self.sde.sigma_t(t)
+        if self.parameterization == "noise":
+            score = -pred / sigma_t
+        elif self.parameterization == "x0":
+            score = (mean_t_coeff * pred - xt) / sigma_t**2
+        elif self.parameterization == "score":
+            score = pred
+        else:
+            raise ValueError(
+                f"Invalid parameterization: {self.parameterization}"
+            )
+        return score
+
+
     # helper function to sample the noised data
-    def _sample_xt(self, x0: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
+    def _sample_xt_eps(self, x0: torch.Tensor, ts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if ts.shape[0] != x0.shape[0]:
             raise ValueError(
                 f"Batch mismatch: x0 has batch {x0.shape[0]}, ts has batch {ts.shape[0]}"
@@ -74,9 +94,9 @@ class ContinuousDiffusion(BaseDiffusion):
         sigma_t = self.sde.sigma_t(ts) # shape (batch_size, 1, ..., 1) in this case, sigma_t has shape (batch_size, 1, 1)
         eps = torch.randn_like(x0) # shape (batch_size, num_features, dim)
         xt = mean_t_coeff * x0 + sigma_t * eps # shape (batch_size, num_features, dim)
-        return xt # shape (batch_size, num_features, dim)
+        return xt, eps # shape (batch_size, num_features, dim)
 
-    def _compute_score(self, x0: torch.Tensor, xt: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
+    def _compute_score(self, x0: torch.Tensor, xt: torch.Tensor, ts: torch.Tensor) -> torch.Tensor: # private function to compute the score of the noised data
         if x0.shape != xt.shape:
             raise ValueError(
                 f"x0 and xt must have the same shape, got shape {x0.shape} and {xt.shape}"
@@ -92,7 +112,7 @@ class ContinuousDiffusion(BaseDiffusion):
         score = -(xt - mean_t_coeff * x0) / (sigma_t**2)
         return score # shape (batch_size, num_features, dim)
     
-    def _compute_target(self, x0: torch.Tensor, xt: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
+    def _compute_target(self, x0: torch.Tensor, xt: torch.Tensor, eps: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
         if x0.shape != xt.shape:
             raise ValueError(
                 f"x0 and xt must have the same shape, got shape {x0.shape} and {xt.shape}"
@@ -102,9 +122,9 @@ class ContinuousDiffusion(BaseDiffusion):
                 f"Batch mismatch: x0 has batch {x0.shape[0]}, xt has batch {xt.shape[0]}"
             )
         if self.parameterization == "noise":
-            raise NotImplementedError
+            target = eps
         elif self.parameterization == "x0":
-            raise NotImplementedError
+            target = x0
         elif self.parameterization == "score":
             target = self._compute_score(x0, xt, ts)
         else:
