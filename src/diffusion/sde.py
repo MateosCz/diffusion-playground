@@ -106,7 +106,7 @@ class VPSDE(BaseSDE):
         beta = self.schedule.beta(t)
         return -0.5 * beta * x
 
-    def diffusion(self, t: torch.Tensor):
+    def diffusion(self, x: torch.Tensor, t: torch.Tensor):
         beta = self.schedule.beta(t)
         return torch.sqrt(beta)
 

@@ -26,23 +26,31 @@ class ContinuousDiffusion(BaseDiffusion):
         constant_t: float = 1.0,
         return_time: bool = False,
         t_min: float = 5e-3,
+        ts: Optional[torch.Tensor] = None,
     ):
         device = x0.device
         dtype = x0.dtype
         batch_size = x0.shape[0]
         dim = x0.shape[1]
 
-        # sample time uniformly
-        ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) # shape (batch_size, 1)
-        if t_dist_kw == "uniform":
-            ts = ts * (self.total_time - t_min) + t_min
-        elif t_dist_kw == "quadratic":
-            ts = ts ** 2
-        elif t_dist_kw == "linear":
-            ts = torch.linspace(0, self.total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
-            ts = torch.unsqueeze(ts,dim=0).repeat(batch_size,1) # shape (batch_size, n_steps)
-        elif t_dist_kw == "constant":
-            ts = constant_t * torch.ones(size=(batch_size,1), device=device, dtype=dtype)
+        # Use a pre-sampled time when provided (e.g. a per-graph time shared with
+        # another diffusion process); otherwise sample one according to t_dist_kw.
+        if ts is not None:
+            ts = ts.to(device=device, dtype=dtype)
+            if ts.ndim == 1:
+                ts = ts.unsqueeze(-1)
+        else:
+            # sample time uniformly
+            ts = torch.rand(size=(batch_size,1), device=device, dtype=dtype) # shape (batch_size, 1)
+            if t_dist_kw == "uniform":
+                ts = ts * (self.total_time - t_min) + t_min
+            elif t_dist_kw == "quadratic":
+                ts = ts ** 2
+            elif t_dist_kw == "linear":
+                ts = torch.linspace(0, self.total_time, n_steps, device=device, dtype=dtype) # shape (n_steps)
+                ts = torch.unsqueeze(ts,dim=0).repeat(batch_size,1) # shape (batch_size, n_steps)
+            elif t_dist_kw == "constant":
+                ts = constant_t * torch.ones(size=(batch_size,1), device=device, dtype=dtype)
         expanded_ts = self._expand_time_to_x(ts, x0)
         # sample the noised data
         xt = self._sample_xt(x0, expanded_ts)
@@ -78,7 +86,10 @@ class ContinuousDiffusion(BaseDiffusion):
                 f"Batch mismatch: x0 has batch {x0.shape[0]}, xt has batch {xt.shape[0]}"
             )
         sigma_t = self.sde.sigma_t(ts) # shape (batch_size, 1, ..., 1) in this case, sigma_t has shape (batch_size, 1, 1)
-        score = -(xt - x0) / (sigma_t**2)
+        mean_t_coeff = self.sde.mean_t_coeff(ts)
+        # score of N(xt; alpha_t * x0, sigma_t^2 I): use the mean coefficient,
+        # not x0 directly (they differ whenever alpha_t != 1, i.e. for t > 0).
+        score = -(xt - mean_t_coeff * x0) / (sigma_t**2)
         return score # shape (batch_size, num_features, dim)
     
     def _compute_target(self, x0: torch.Tensor, xt: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
@@ -143,11 +154,12 @@ class ContinuousDiffusion(BaseDiffusion):
         dt: torch.Tensor,
         probability_flow: bool = False,
     ):
-        dW = torch.sqrt(dt)*torch.randn_like(xt)
         if probability_flow:
-            xt_next = xt + self.sde.reverse_drift(xt, t, score,eta=0) * (-dt) + self.sde.diffusion(xt,t) * dW # probability flow ODE
+            # probability flow ODE: deterministic, no diffusion noise term
+            xt_next = xt + self.sde.reverse_drift(xt, t, score, eta=0) * (-dt)
         else:
-            xt_next = xt + self.sde.reverse_drift(xt, t, score) * (-dt) + self.sde.diffusion(xt,t) * dW
+            dW = torch.sqrt(dt) * torch.randn_like(xt)
+            xt_next = xt + self.sde.reverse_drift(xt, t, score) * (-dt) + self.sde.diffusion(xt, t) * dW
         return xt_next
 
 
@@ -160,7 +172,8 @@ class ContinuousDiffusion(BaseDiffusion):
         tau: float = 0.25,
     ):
         eps = torch.randn_like(xt)
-        xt_corrected = xt + tau * score * dt + torch.sqrt(2 * tau) * eps # Langevin corrector step
+        tau_t = torch.as_tensor(tau, device=xt.device, dtype=xt.dtype)
+        xt_corrected = xt + tau_t * score * dt + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
         return xt_corrected
     
     def tweedie_step(

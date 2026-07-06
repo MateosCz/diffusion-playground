@@ -40,8 +40,9 @@ class WrappedNormalDistribution():
             C2_component = (x - self.mu + k * T) / (self.sigma**2)
             C_2 += C_component * C2_component
             C += C_component
-        
-        return C_2 / C
+
+        # guard against 0/0 when every truncation term underflows (very small sigma)
+        return C_2 / (C + 1e-9)
             
 
 

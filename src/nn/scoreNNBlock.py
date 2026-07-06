@@ -34,19 +34,25 @@ class SinusoidalTimeEmbedding(nn.Module):
 
 class SinEmbedding(nn.Module):
     """
-    Sinusoidal embedding of a (relative) coordinate vector, following the
-    DiffCSP CSPNet design. Maps a tensor of shape (..., n_space) to
-    (..., n_space * n_frequencies * 2) sin/cos features.
+    Sinusoidal embedding of a (relative) coordinate vector. Maps a tensor of
+    shape (..., n_space) to (..., n_space * n_frequencies * 2) sin/cos features.
 
     Used to embed fractional-coordinate differences (and, via a projection,
     velocity differences) on the edges of a crystal graph.
+
+    The coordinates are expected to live on the LieTorus in ``[-pi, pi)``
+    (period ``2*pi``), matching the ``TDMDiffusion`` convention. Integer
+    frequencies ``k = 0, 1, ..., n-1`` therefore give ``sin(k * dx)`` features
+    that are periodic with period ``2*pi``, i.e. respect the toroidal boundary.
+    (The original DiffCSP design used ``2*pi * k`` for coordinates in ``[0, 1)``;
+    dropping the ``2*pi`` factor rescales that convention to the ``2*pi`` torus.)
     """
     def __init__(self, n_frequencies: int = 10, n_space: int = 3):
         super().__init__()
         self.n_frequencies = n_frequencies
         self.n_space = n_space
         self.dim = n_space * n_frequencies * 2
-        freqs = 2.0 * math.pi * torch.arange(n_frequencies, dtype=torch.float32)
+        freqs = torch.arange(n_frequencies, dtype=torch.float32)
         self.register_buffer("frequencies", freqs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -222,6 +222,25 @@ class ConcatFeatures(BaseTransform):
 
         return data
 
+@functional_transform("cast_floating")
+class CastFloating(BaseTransform):
+    """Cast every floating-point tensor attribute to ``dtype`` (default float32).
+
+    Integer tensors (e.g. atom types ``h`` and ``edge_index``) are left
+    untouched. Useful because crystal datasets are often stored in float64,
+    which mismatches float32 network weights.
+    """
+
+    def __init__(self, dtype: torch.dtype = torch.float32) -> None:
+        self.dtype = dtype
+
+    def forward(self, data: Data) -> Data:
+        for key, value in data.items():
+            if torch.is_tensor(value) and torch.is_floating_point(value):
+                data[key] = value.to(self.dtype)
+        return data
+
+
 """
 Transform the position [0,1)^n to angle [-pi,pi)^n
 """

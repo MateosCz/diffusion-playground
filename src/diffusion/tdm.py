@@ -535,6 +535,7 @@ class TDMDiffusion(BaseDiffusion):
         constant_t: float = 1.0,
         return_time: bool = False,
         t_min: float = 5e-3,
+        ts: Optional[torch.Tensor] = None,
     ):
         """
         Graph-structured forward (noising) process for training.
@@ -576,7 +577,13 @@ class TDMDiffusion(BaseDiffusion):
         f0 = graph.x                     # (N_total, 2)
 
         # --- one time per graph, then expand to per-node ---
-        if t_dist_kw == "uniform":
+        # A pre-sampled ``ts`` (num_graphs, 1) can be supplied to share the time
+        # with another diffusion process (e.g. the lattice diffusion in KLDM).
+        if ts is not None:
+            ts = ts.to(device=device, dtype=dtype)
+            if ts.ndim == 1:
+                ts = ts.unsqueeze(-1)
+        elif t_dist_kw == "uniform":
             ts = torch.rand(size=(num_graphs, 1), device=device, dtype=dtype)
             ts = ts * (self.total_time - t_min) + t_min
         elif t_dist_kw == "quadratic":
