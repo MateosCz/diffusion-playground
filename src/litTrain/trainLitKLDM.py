@@ -35,9 +35,9 @@ from src.device import get_default_device, get_lightning_accelerator
 # --------------------------------------------------------------------------- #
 total_time = 2.0
 dim = 3
-n_epoch = 200
+n_epoch = 500
 lr = 1e-3
-batch_size = 64
+batch_size = 256
 
 data_folder = "data/carbon-24"
 dataset_name = "carbon24"
@@ -64,7 +64,7 @@ nn_kwargs = {
 
 lit_kwargs = {
     "lambda_l": 1.0,
-    "lambda_f": 2.0,
+    "lambda_f": 1.0,
 }
 
 
@@ -112,7 +112,7 @@ def build_kldm() -> KLDM:
         zero_cog=nn_kwargs["zero_cog"],
     )
     l_sde = VPSDE(schedule=LinearSchedule(beta_min=2.0, beta_max=2.0))
-    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time)
+    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="x0")
     return KLDM(
         l_diffusion=diffusion_l,
         f_diffusion=diffusion_f,

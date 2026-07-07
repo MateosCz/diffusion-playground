@@ -217,9 +217,11 @@ class KLDM(nn.Module):
 
             # ---- joint score at the current state ----
             pred_l, pred_f = score_fn(graph, v_reverse, t_g)
-            pred_l = self.l_diffusion.construct_score(t_g, l_reverse, pred_l) # construct score from variant targets.
+            
             score_l = self._as_lattice_score(pred_l)           # (num_graph, 6, 1)
-
+            # map the raw network prediction (score / x0 / noise) to an actual
+            # score; use t_l (num_graph, 1, 1) so it broadcasts over l_reverse.
+            score_l = self.l_diffusion.construct_score(t_l, l_reverse, score_l)
             # ---- velocity predictor (TDM) ----
             scorev = f_diff._construct_scorev(pred_f, v_reverse, t_n)
             pf_v = probability_flow or predictor_corrector
@@ -253,6 +255,7 @@ class KLDM(nn.Module):
                 for _ in range(predictor_corrector_n_steps):
                     score_l, score_f = score_fn(graph, v_reverse, t_g_next)
                     score_l = self._as_lattice_score(score_l)
+                    score_l = self.l_diffusion.construct_score(t_l_next, l_reverse, score_l)
                     scorev = f_diff._construct_scorev(score_f, v_reverse, t_n_next)
                     if only_correct_vt:
                         v_reverse = f_diff._langevin_corrector_step_graph(

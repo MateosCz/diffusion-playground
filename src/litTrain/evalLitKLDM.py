@@ -111,9 +111,9 @@ def evaluate(
     ckpt_path: str,
     split: str = "val",
     batch_size: int = 64,
-    n_steps: int = 200,
+    n_steps: int = 50,
     pc: bool = False,
-    pc_steps: int = 100,
+    pc_steps: int = 10,
     max_batches: int | None = None,
     device_str: str = DEFAULT_DEVICE,
     seed: int | None = 0,
@@ -186,7 +186,7 @@ def main():
     )
     parser.add_argument("--split", type=str, default="val", choices=["train", "val", "test"])
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--n-steps", type=int, default=50, help="Reverse-diffusion steps.")
+    parser.add_argument("--n-steps", type=int, default=1000, help="Reverse-diffusion steps.")
     parser.add_argument("--pc", action="store_true", help="Use predictor-corrector.")
     parser.add_argument("--pc-steps", type=int, default=20, help="Predictor-corrector steps.")
     parser.add_argument(
