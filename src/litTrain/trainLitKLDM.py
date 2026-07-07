@@ -35,12 +35,12 @@ from src.device import get_default_device, get_lightning_accelerator
 # --------------------------------------------------------------------------- #
 total_time = 2.0
 dim = 3
-n_epoch = 500
+n_epoch = 100
 lr = 1e-3
-batch_size = 256
+batch_size = 1024
 
-data_folder = "data/carbon-24"
-dataset_name = "carbon24"
+data_folder = "data/perov-5"
+dataset_name = "perov-5"
 
 diffusion_kwargs = {
     "t_dist_kw": "uniform",
