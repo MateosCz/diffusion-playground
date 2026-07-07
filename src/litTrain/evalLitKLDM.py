@@ -27,21 +27,21 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from tqdm.auto import tqdm
 
 from src.dataLib.realCrystal import CrystalDataset
-from src.dataLib.data_util import PyGData_to_Structure
+from src.dataLib.data_util import PyGData_to_Structure, kldm_output_to_structures
 from src.metrics.csp import CSPMetrics
 from src.litTrain.trainLitKLDM import (
     build_transform,
     build_model,
     build_kldm,
-    data_folder,
 )
 from src.lit.litCSPVNet import LitCSPVNet
 
-
+dataset_name = "perov-5"
+data_folder = "data/perov-5"
 # --------------------------------------------------------------------------- #
 # Config (CLI-overridable defaults)
 # --------------------------------------------------------------------------- #
-DEFAULT_CKPT_GLOB = "checkpoints/*/CSPVNet_KLDM_*/*.ckpt"
+DEFAULT_CKPT_GLOB = f"checkpoints/*/CSPVNet_KLDM_{dataset_name}_*/*.ckpt"
 
 # Reverse-diffusion sampling on CPU is robust and avoids missing MPS/CUDA TDM
 # kernels; override with --device if you have full GPU kernel coverage.
@@ -91,23 +91,10 @@ def _cast_floats(graph: Data) -> Data:
     return graph
 
 
-def kldm_output_to_structures(graph: Data, l0: torch.Tensor, f0: torch.Tensor):
-    """Split the batched reverse-diffusion output into pymatgen Structures."""
-    batch_vec = graph.batch.detach().cpu()
-    h = graph.h.detach().cpu()
-    f0 = f0.detach().cpu()
-    l0 = l0.detach().cpu()
-
-    structures = []
-    for g in range(int(batch_vec.max().item()) + 1):
-        mask = batch_vec == g
-        data = Data(x=f0[mask], h=h[mask], l=l0[g].view(1, 6))
-        structures.append(PyGData_to_Structure(data))
-    return structures
-
-
 @torch.inference_mode()
 def evaluate(
+    dataset_name: str,
+    data_folder: str,
     ckpt_path: str,
     split: str = "val",
     batch_size: int = 64,
@@ -184,6 +171,8 @@ def main():
         default=None,
         help="Path to a .ckpt file. Defaults to the latest CSPVNet_KLDM checkpoint.",
     )
+    parser.add_argument("--dataset-name", type=str, default=dataset_name)
+    parser.add_argument("--data-folder", type=str, default=data_folder)
     parser.add_argument("--split", type=str, default="val", choices=["train", "val", "test"])
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--n-steps", type=int, default=1000, help="Reverse-diffusion steps.")
@@ -204,6 +193,8 @@ def main():
     print(f"Split: {args.split} | n_steps: {args.n_steps} | device: {args.device}")
 
     summary = evaluate(
+        dataset_name=dataset_name,
+        data_folder=data_folder,
         ckpt_path=ckpt_path,
         split=args.split,
         batch_size=args.batch_size,

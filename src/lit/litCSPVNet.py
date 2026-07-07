@@ -3,8 +3,10 @@ from torch import nn
 import lightning as L
 from torch_geometric.data import Data
 from typing import Optional, Tuple
-
+from src.metrics.csp import CSPMetrics
+from src.dataLib.data_util import kldm_output_to_structures
 from src.diffusion.kldm import KLDM
+from src.dataLib.data_util import PyGData_to_Structure
 
 
 def time_loss_weight(t: torch.Tensor, total_time: float) -> torch.Tensor:
@@ -51,20 +53,25 @@ class LitCSPVNet(L.LightningModule):
         model: nn.Module,
         kldm: KLDM,
         diffusion_kwargs: dict,
+        sample_kwargs: dict,
         batch_size: int,
         lr: float = 1e-3,
         lambda_l: float = 1.0,
         lambda_f: float = 1.0,
+        matcher_kwargs: Optional[dict] = None,
     ):
         super().__init__()
         self.model = model
         self.kldm = kldm
         self.diffusion_kwargs = diffusion_kwargs
+        self.sample_kwargs = sample_kwargs
         self.batch_size = batch_size
         self.lr = lr
         self.lambda_l = lambda_l
         self.lambda_f = lambda_f
         self._train_loss = []
+        self._val_metrics = CSPMetrics(**(matcher_kwargs or {}))
+        self._test_metrics = CSPMetrics(**(matcher_kwargs or {}))
         self.save_hyperparameters(ignore=["model", "kldm"])
 
     def forward_from_data(
@@ -140,11 +147,42 @@ class LitCSPVNet(L.LightningModule):
         self._train_loss.append(loss.detach())
         return loss
 
-    def validation_step(self, batch: Data) -> torch.Tensor:
-        return self._shared_step(batch, "validation")
+    def on_validation_epoch_start(self):
+        self._val_metrics.reset()
 
-    def test_step(self, batch: Data) -> torch.Tensor:
-        return self._shared_step(batch, "test")
+    def validation_step(self, batch: Data) -> None:
+        target_structures = [PyGData_to_Structure(batch[j]) for j in range(batch.num_graphs)]
+        gen_l0, gen_f0 = self.sample(batch)
+        self._val_metrics.update(
+            kldm_output_to_structures(batch, gen_l0, gen_f0), target_structures
+        )
+
+    def on_validation_epoch_end(self):
+        summary = self._val_metrics.summarize()
+        self.log_dict({f"val/{k}": v for k, v in summary.items()})
+
+    def on_test_epoch_start(self):
+        self._test_metrics.reset()
+
+    def test_step(self, batch: Data) -> None:
+        target_structures = [PyGData_to_Structure(batch[j]) for j in range(batch.num_graphs)]
+        gen_l0, gen_f0 = self.sample(batch)
+        self._test_metrics.update(
+            kldm_output_to_structures(batch, gen_l0, gen_f0), target_structures
+        )
+
+    def on_test_epoch_end(self):
+        summary = self._test_metrics.summarize()
+        self.log_dict({f"test/{k}": v for k, v in summary.items()})
+    
+    @torch.no_grad()
+    def sample(self, batch: Data) -> Tuple[torch.Tensor, torch.Tensor]:
+        gen_l0, gen_f0 = self.kldm.sample_backward(
+            graphT=batch,
+            score_fn=self.forward_from_data,
+            **self.sample_kwargs,
+        )
+        return gen_l0, gen_f0
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.model.parameters(), lr=self.lr)

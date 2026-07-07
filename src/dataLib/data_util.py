@@ -143,6 +143,21 @@ def PyGData_to_Structure(data: Data):
     )
 
 
+def kldm_output_to_structures(graph: Data, l0: torch.Tensor, f0: torch.Tensor):
+    """Split the batched reverse-diffusion output into pymatgen Structures."""
+    batch_vec = graph.batch.detach().cpu()
+    h = graph.h.detach().cpu()
+    f0 = f0.detach().cpu()
+    l0 = l0.detach().cpu()
+
+    structures = []
+    for g in range(int(batch_vec.max().item()) + 1):
+        mask = batch_vec == g
+        data = Data(x=f0[mask], h=h[mask], l=l0[g].view(1, 6))
+        structures.append(PyGData_to_Structure(data))
+    return structures
+
+
 def PyGData_to_AseAtoms(data: Data):
     from pymatgen.io.ase import AseAtomsAdaptor
 

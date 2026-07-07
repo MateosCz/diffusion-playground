@@ -113,7 +113,7 @@ class KLDM(nn.Module):
         probability_flow: bool = False,
         predictor_corrector: bool = False,
         predictor_corrector_n_steps: int = 1,
-        only_correct_vt: bool = False,
+        only_correct_vt: bool = True,
         tau: float = 1e-3,
         vT_prior_scale: float = 1.0,
         lT_prior_scale: float = 1.0,

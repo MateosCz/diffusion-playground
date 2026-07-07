@@ -35,7 +35,7 @@ from src.device import get_default_device, get_lightning_accelerator
 # --------------------------------------------------------------------------- #
 total_time = 2.0
 dim = 3
-n_epoch = 100
+n_epoch = 500
 lr = 1e-3
 batch_size = 1024
 
@@ -46,6 +46,14 @@ diffusion_kwargs = {
     "t_dist_kw": "uniform",
     "t_min": 5e-3,
     "shared_time": True,  # single per-graph time shared by lattice + coords
+}
+sample_kwargs = {
+    "n_steps": 1000,
+    "predictor_corrector": True,
+    "predictor_corrector_n_steps": 1,
+    "exponential_integration": True,
+    "probability_flow": False,
+    "seed": 0,
 }
 
 nn_kwargs = {
@@ -140,6 +148,7 @@ def main():
         model=model,
         kldm=kldm,
         diffusion_kwargs=diffusion_kwargs,
+        sample_kwargs=sample_kwargs,
         batch_size=batch_size,
         lr=lr,
         lambda_l=lit_kwargs["lambda_l"],
@@ -156,8 +165,8 @@ def main():
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"checkpoints/{timestamp}/{experiment_name}",
-        filename="cspvnet_{epoch:02d}-{validation/loss:.4f}",
-        monitor="validation/loss",
+        filename="cspvnet_{epoch:02d}-{val/rmse:.4f}",
+        monitor="val/rmse",
         mode="min",
         save_top_k=1,
         save_last=True,
@@ -169,6 +178,7 @@ def main():
         max_epochs=n_epoch,
         accelerator=accelerator,
         log_every_n_steps=32,
+        check_val_every_n_epoch=10,  # CSP sampling eval is expensive; run it every 10 epochs
         gradient_clip_val=1.0,  # match the hand-written loops; prevents score-matching blow-ups
         callbacks=[checkpoint_callback],
     )
