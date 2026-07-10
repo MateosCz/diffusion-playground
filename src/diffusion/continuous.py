@@ -181,6 +181,22 @@ class ContinuousDiffusion(BaseDiffusion):
             dW = torch.sqrt(dt) * torch.randn_like(xt)
             xt_next = xt + self.sde.reverse_drift(xt, t, score) * (-dt) + self.sde.diffusion(xt, t) * dW
         return xt_next
+
+    def backward_step_exp(
+        self,
+        xt: torch.Tensor,
+        t: torch.Tensor,
+        score: torch.Tensor,
+        dt: torch.Tensor,
+        probability_flow: bool = False,
+    ):
+        if probability_flow:
+            # probability flow ODE: deterministic, no diffusion noise term
+            xt_next = torch.exp(dt) * xt + torch.expm1(dt) * score
+        else:
+            eps = torch.randn_like(xt)
+            xt_next = torch.exp(dt) * xt + 2 * torch.expm1(dt) * score + torch.sqrt(torch.expm1(2 * dt)) * eps
+        return xt_next
     
     
 
@@ -188,70 +204,16 @@ class ContinuousDiffusion(BaseDiffusion):
     def langevin_corrector_step(
         self,
         xt: torch.Tensor,
-        t: torch.Tensor,
         score: torch.Tensor,
         dt: torch.Tensor,
         tau: float = 0.25,
-    ):
-        eps = torch.randn_like(xt)
-        tau_t = torch.as_tensor(tau, device=xt.device, dtype=xt.dtype)
-        xt_corrected = xt + tau_t * score * dt + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
-        return xt_corrected
-        
-    @torch.no_grad()
-    def reverse_step_predictor(
-        self,
-        t: torch.Tensor,
-        x_t: torch.Tensor,
-        score: torch.Tensor,
-        dt: torch.Tensor,
-    ):
-        """
-        Exact (semi-analytic) deterministic reverse step.
- 
-        Exploits the closed-form VP-SDE transition kernel between ``t`` and
-        ``t + dt`` (via ``sde.mean_t_coeff``/``sde.sigma_t``), instead of a
-        first-order Euler discretization of the reverse ODE. This matches the
-        reference KLDM implementation's ``reverse_step_predictor``/
-        ``exp=True`` path and avoids the extra discretization error naive
-        Euler introduces, especially where beta varies a lot over the
-        schedule.
- 
-        ``dt`` is the *signed* increment such that ``t_next = t + dt``; when
-        integrating backward in time (as during sampling) this is negative.
-        """
-        alpha_curr, sigma_curr = self.sde.mean_t_coeff(t), self.sde.sigma_t(t)
-        alpha_next, sigma_next = self.sde.mean_t_coeff(t + dt), self.sde.sigma_t(t + dt)
- 
-        alpha_ratio = alpha_next / alpha_curr
-        score_coeff = (alpha_ratio * sigma_curr - sigma_next) * sigma_curr
- 
-        return alpha_ratio * x_t + score_coeff * score
- 
-    @torch.no_grad()
-    def reverse_step_corrector(
-        self,
-        x_t: torch.Tensor,
-        score: torch.Tensor,
-        tau: float,
         index: Optional[torch.Tensor] = None,
     ):
-        """
-        Score-norm-adaptive Langevin corrector (annealed-Langevin / SNR step
-        size), matching the reference KLDM implementation. Unlike a fixed
-        ``tau * dt`` step, ``delta`` adapts to the current score magnitude so
-        the corrector remains well-scaled across the whole time range.
- 
-        ``index`` is an optional per-row graph index (e.g. ``batch.batch``)
-        used to average the score norm per-graph rather than globally; pass
-        ``None`` for data that is already one-row-per-sample (e.g. lattice).
-        """
         if index is None:
             denom = score.square().mean(dim=-1, keepdim=True)
             delta = tau / denom
         else:
             from torch_geometric.utils import scatter
- 
             denom = scatter(
                 score.square().mean(dim=-1, keepdim=True),
                 index,
@@ -259,10 +221,11 @@ class ContinuousDiffusion(BaseDiffusion):
                 reduce="mean",
             )
             delta = tau / denom[index]
- 
-        eps = torch.randn_like(x_t)
-        return x_t + delta * score + torch.sqrt(2 * delta) * eps
-    
+        eps = torch.randn_like(xt)
+        tau_t = torch.as_tensor(delta, device=xt.device, dtype=xt.dtype)
+        xt_corrected = xt + tau_t * score * dt + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
+        return xt_corrected
+        
     def tweedie_step(
         self,
         xt: torch.Tensor,

@@ -15,9 +15,12 @@ class CrystalDataset(torchdata.Dataset):
             self,
             path: str,
             transform: Optional[Callable] = None,
+            portion: Optional[float] = None
     ) -> None:
         self.transform = transform
         self.data = self.load(path)
+        if portion is not None:
+            self.data = self.data[:int(len(self.data) * portion)]
 
     @staticmethod
     def load(path):

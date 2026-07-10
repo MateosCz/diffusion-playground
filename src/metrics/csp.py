@@ -1,3 +1,4 @@
+import numpy as np
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core import Structure
 
@@ -27,7 +28,12 @@ class CSPMetrics:
             if si is not None:
                 v = validity_structure(si)
                 if v:
-                    rms = self.matcher.get_rms_dist(si, st)
+                    try:
+                        rms = self.matcher.get_rms_dist(si, st)
+                    except np.linalg.LinAlgError:
+                        # Early samples can have lattices that pass basic validity
+                        # checks but are too ill-conditioned for Niggli reduction.
+                        rms = None
                     m = int(rms is not None)
 
                     if rms is not None:
@@ -44,6 +50,7 @@ class CSPMetrics:
         summary["rmse"] = safe_divide(sum(self.rmse), len(self.rmse))
 
         return summary
+    
 
     def reset(self):
         self.valid = []
