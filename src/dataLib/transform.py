@@ -8,8 +8,7 @@ from torch_geometric.data import Data
 from torch_geometric.data.datapipes import functional_transform
 from torch_geometric.transforms import BaseTransform
 from torch_geometric.utils import dense_to_sparse, one_hot
-from src.dataLib.synthetic import pos_to_angle
-from src.dataLib.data_util import read_json
+from src.dataLib.synthetic import pos_to_angle, angle_to_pos
 
 
 @functional_transform("fully_connected_graph")
@@ -105,6 +104,8 @@ class ContinuousIntervalLengths(BaseTransform):
                 ],
     ):
         if isinstance(lengths_loc_scale, str) or isinstance(lengths_loc_scale, Path):
+            from src.dataLib.data_util import read_json
+
             print(f"Reading 'lengths_loc_scale' from '{lengths_loc_scale}'...")
             json_dict = read_json(lengths_loc_scale)
             json_dict = {int(k): json_dict[k] for k in json_dict}
@@ -255,3 +256,8 @@ class Pos2Angle(BaseTransform):
         value = pos_to_angle(value)
         setattr(data, self.out_key, value)
         return data
+
+    def invert_one(self, angle: np.ndarray):
+        return angle_to_pos(angle)
+
+    

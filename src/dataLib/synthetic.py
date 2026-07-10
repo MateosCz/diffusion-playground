@@ -25,7 +25,7 @@ def so2mat_to_angle(so2matrix):
     return theta
 
 def angle_to_pos(theta, a=0, b=1):
-    """Map theta to x \in [a,b)"""
+    """Map theta from [-pi,pi) to x \in [a,b)"""
     x = (theta/ (2*torch.pi)+0.5) * (b-a)
     return x
 

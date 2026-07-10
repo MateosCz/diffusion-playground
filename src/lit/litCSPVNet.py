@@ -4,7 +4,7 @@ import lightning as L
 from torch_geometric.data import Data
 from typing import Optional, Tuple
 from src.metrics.csp import CSPMetrics
-from src.dataLib.data_util import kldm_output_to_structures
+from src.dataLib.data_util import kldm_output_to_structures_batch
 from src.diffusion.kldm import KLDM
 from src.dataLib.data_util import PyGData_to_Structure
 

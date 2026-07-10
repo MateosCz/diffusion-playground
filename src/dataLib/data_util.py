@@ -5,11 +5,20 @@ from torch_geometric.data import Data
 
 import json
 from pathlib import Path
-from typing import Sequence, Union
+from typing import TYPE_CHECKING, Sequence, Union
 
 import ase.io
 import numpy as np
 from ase.atoms import Atoms
+from ase.data import chemical_symbols
+from pymatgen.core import Lattice, Structure
+
+if TYPE_CHECKING:
+    from src.dataLib.transform import (
+        ContinuousIntervalAngles,
+        ContinuousIntervalLengths,
+        Pos2Angle,
+    )
 
 
 """
@@ -113,7 +122,12 @@ def save_images(
 ):
     ase.io.write(filename=filename, images=images, format=fmt)
 
-def PyGData_to_Structure(data: Data):
+def PyGData_to_Structure(
+    data: Data,
+    transform_lengths=None,
+    transform_angles=None,
+    transform_positions=None,
+):
     from src.dataLib.preprocessCSV import lattice_params_to_matrix
     from pymatgen.core import Lattice, Structure
 
@@ -126,45 +140,96 @@ def PyGData_to_Structure(data: Data):
     else:
         log_lengths = torch.as_tensor(data.lengths).detach().cpu().view(-1)
         tan_angles = torch.as_tensor(data.angles).detach().cpu().view(-1)
-    # Lengths are stored as log(l) (ContinuousIntervalLengths); invert to Angstrom.
-    lengths = torch.exp(log_lengths).numpy()
-    # Angles are stored as tan(theta_rad - pi/2) (ContinuousIntervalAngles); invert to degrees.
-    angles = torch.rad2deg(torch.arctan(tan_angles) + torch.pi / 2.0).numpy()
-    # Diffusion samples live in angle space; pymatgen expects fractional coords.
-    frac_coords = angle_to_pos(wrap_angle(torch.as_tensor(data.x))).detach().cpu().numpy()
+
+    if transform_lengths is not None:
+        n_atoms = int(data.x.shape[0]) if getattr(data, "x", None) is not None else int(data.pos.shape[0])
+        a, b, c = transform_lengths.invert_one(log_lengths.numpy(), n_atoms)
+        lengths = np.array([a, b, c])
+    else:
+        lengths = torch.exp(log_lengths).numpy()
+
+    if transform_angles is not None:
+        alpha, beta, gamma = transform_angles.invert_one(tan_angles.numpy())
+        angles = np.array([alpha, beta, gamma])
+    else:
+        angles = torch.rad2deg(torch.arctan(tan_angles) + torch.pi / 2.0).numpy()
+
+    x = torch.as_tensor(data.x).detach().cpu()
+    if transform_positions is not None:
+        frac_coords = transform_positions.invert_one(x.numpy())
+    else:
+        frac_coords = angle_to_pos(wrap_angle(x)).numpy()
+
     numbers = torch.as_tensor(data.h).detach().cpu().numpy()
-    lattice = lattice_params_to_matrix(*lengths, *angles)
+    # lattice = lattice_params_to_matrix(*lengths, *angles)
 
     return Structure(
-        lattice=Lattice(lattice),
+        # lattice=Lattice(lattice),
+        lattice=Lattice.from_parameters(a=a,b=b,c=c,alpha=alpha,beta=beta,gamma=gamma),
         species=numbers,
         coords=frac_coords,
         coords_are_cartesian=False,
     )
 
+def kldm_output_to_structures_one(
+    graph: Data,
+    l0: torch.Tensor,
+    f0: torch.Tensor,
+    transform_lengths: "ContinuousIntervalLengths",
+    transform_angles: "ContinuousIntervalAngles",
+    transform_positions: "Pos2Angle",
+):
+    """Convert one reverse-diffusion output into a pymatgen Structure."""
+    data = Data(
+        x=torch.as_tensor(f0),
+        h=graph.h,
+        l=torch.as_tensor(l0).reshape(1, -1),
+    )
+    return PyGData_to_Structure(
+        data,
+        transform_lengths=transform_lengths,
+        transform_angles=transform_angles,
+        transform_positions=transform_positions,
+    ).get_sorted_structure()
 
-def kldm_output_to_structures(graph: Data, l0: torch.Tensor, f0: torch.Tensor):
+
+def kldm_output_to_structures_batch(
+    graph: Data,
+    l0: torch.Tensor,
+    f0: torch.Tensor,
+    transform_lengths: "ContinuousIntervalLengths",
+    transform_angles: "ContinuousIntervalAngles",
+    transform_positions: "Pos2Angle",
+):
     """Split the batched reverse-diffusion output into pymatgen Structures."""
     batch_vec = graph.batch.detach().cpu()
-    h = graph.h.detach().cpu()
     f0 = f0.detach().cpu()
     l0 = l0.detach().cpu()
-
-    # recover transformed lattice and positions
-    
 
     structures = []
     for g in range(int(batch_vec.max().item()) + 1):
         mask = batch_vec == g
-        data = Data(x=f0[mask], h=h[mask], l=l0[g].view(1, 6))
-        structures.append(PyGData_to_Structure(data))
+        structure = kldm_output_to_structures_one(
+            graph[g],
+            l0[g],
+            f0[mask],
+            transform_lengths,
+            transform_angles,
+            transform_positions,
+        )
+        structures.append(structure)
     return structures
 
 
-def PyGData_to_AseAtoms(data: Data):
+def PyGData_to_AseAtoms(data: Data, transform_lengths=None, transform_angles=None, transform_positions=None):
     from pymatgen.io.ase import AseAtomsAdaptor
 
-    structure = PyGData_to_Structure(data)
+    structure = PyGData_to_Structure(
+        data,
+        transform_lengths=transform_lengths,
+        transform_angles=transform_angles,
+        transform_positions=transform_positions,
+    )
     atoms = AseAtomsAdaptor.get_atoms(structure)
     atoms.pbc = True
     return atoms
