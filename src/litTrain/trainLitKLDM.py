@@ -128,7 +128,7 @@ def build_kldm() -> KLDM:
         zero_cog=nn_kwargs["zero_cog"],
     )
     l_sde = VPSDE(schedule=LinearSchedule(beta_min=0.1, beta_max=20.0))
-    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="x0")
+    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="eps")
     return KLDM(
         l_diffusion=diffusion_l,
         f_diffusion=diffusion_f,
@@ -144,7 +144,7 @@ def main():
 
     transform = build_transform()
     train_ds = CrystalDataset(path=os.path.join(data_folder, "train.pt"), transform=transform)
-    val_ds = CrystalDataset(path=os.path.join(data_folder, "val.pt"), transform=transform, portion=0.01)
+    val_ds = CrystalDataset(path=os.path.join(data_folder, "val.pt"), transform=transform, portion=0.2)
 
     train_loader = PyGDataLoader(
         train_ds,
@@ -175,6 +175,7 @@ def main():
         lr=lr,
         lambda_l=lit_kwargs["lambda_l"],
         lambda_f=lit_kwargs["lambda_f"],
+        transform=transform,
     )
 
     experiment_name = f"CSPVNet_KLDM_{dataset_name}_no_h"
