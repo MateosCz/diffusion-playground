@@ -18,7 +18,7 @@ import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 import wandb
-
+import json
 import src.dataLib.transform as T
 from src.dataLib.realCrystal import CrystalDataset
 from src.nn.CSPVNet import CSPVNet
@@ -35,12 +35,13 @@ from src.device import get_default_device, get_lightning_accelerator
 # --------------------------------------------------------------------------- #
 total_time = 2.0
 dim = 3
-n_epoch = 500
+n_epoch = 1000
 lr = 1e-3
-batch_size = 1024
+batch_size = 256
+num_workers = 1
 
-data_folder = "data/perov-5"
-dataset_name = "perov-5"
+data_folder = "data/mp-20"
+dataset_name = "mp-20"
 
 diffusion_kwargs = {
     "t_dist_kw": "uniform",
@@ -48,20 +49,20 @@ diffusion_kwargs = {
     "shared_time": True,  # single per-graph time shared by lattice + coords
 }
 sample_kwargs = {
-    "n_steps": 1000,
-    "predictor_corrector": True,
-    "predictor_corrector_n_steps": 1,
+    "n_steps": 300,
+    "evaluate_batch_size": 64,
+    "predictor_corrector": False,
+    "predictor_corrector_n_steps": 0,
     "exponential_integration": True,
     "probability_flow": False,
-    "seed": 0,
 }
 
 nn_kwargs = {
-    "hidden_dim": 256,
-    "time_dim": 128,
+    "hidden_dim": 512,
+    "time_dim": 256,
     "num_layers": 6,
-    "h_dim": 100,       # embedding table size for atom types (indexed by atomic number)
-    "num_freqs": 10,
+    "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
+    "num_freqs": 128,
     "ln": True,
     "smooth": False,    # embed discrete atom types via nn.Embedding
     "pred_h": False,    # <-- do not predict atom types
@@ -75,12 +76,18 @@ lit_kwargs = {
     "lambda_f": 1.0,
 }
 
+def read_lengths_loc_scale() -> dict:
+    with open(f"{data_folder}/train_mean_std_stats.json", "r") as f:
+        mean_std_stats = json.load(f)
+    return mean_std_stats
+
 
 def build_transform() -> PyGT.Compose:
+    mean_std_stats = read_lengths_loc_scale()
     return PyGT.Compose(
         [
-            T.ContinuousIntervalLengths(in_key="lengths", out_key="lengths"),
-            T.ContinuousIntervalAngles(in_key="angles", out_key="angles"),
+            T.ContinuousIntervalLengths(in_key="lengths", out_key="lengths", lengths_loc_scale= f"{data_folder}/train_mean_std_stats.json"),
+            T.ContinuousIntervalAngles(in_key="angles", out_key="angles",angles_loc_scale= (0.0, 0.35) ),
             T.FullyConnectedGraph(key="edge_index", len_from="pos"),
             # lattice vector l = (log a, log b, log c, tan alpha, tan beta, tan gamma)
             T.ConcatFeatures(in_keys=["lengths", "angles"], out_key="l"),
@@ -119,7 +126,7 @@ def build_kldm() -> KLDM:
         n_sigma_rs=2000,
         zero_cog=nn_kwargs["zero_cog"],
     )
-    l_sde = VPSDE(schedule=LinearSchedule(beta_min=2.0, beta_max=2.0))
+    l_sde = VPSDE(schedule=LinearSchedule(beta_min=0.1, beta_max=20.0))
     diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="x0")
     return KLDM(
         l_diffusion=diffusion_l,
@@ -136,10 +143,24 @@ def main():
 
     transform = build_transform()
     train_ds = CrystalDataset(path=os.path.join(data_folder, "train.pt"), transform=transform)
-    val_ds = CrystalDataset(path=os.path.join(data_folder, "val.pt"), transform=transform)
+    val_ds = CrystalDataset(path=os.path.join(data_folder, "val.pt"), transform=transform, portion=0.01)
 
-    train_loader = PyGDataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = PyGDataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    train_loader = PyGDataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+        pin_memory=True,
+    )
+    val_loader = PyGDataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+        pin_memory=True,
+    )
 
     model = build_model()
     kldm = build_kldm()
@@ -178,7 +199,7 @@ def main():
         max_epochs=n_epoch,
         accelerator=accelerator,
         log_every_n_steps=32,
-        check_val_every_n_epoch=10,  # CSP sampling eval is expensive; run it every 10 epochs
+        check_val_every_n_epoch=20,  # CSP sampling eval is expensive; run it every 10 epochs
         gradient_clip_val=1.0,  # match the hand-written loops; prevents score-matching blow-ups
         callbacks=[checkpoint_callback],
     )

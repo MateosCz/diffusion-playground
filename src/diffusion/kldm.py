@@ -117,6 +117,7 @@ class KLDM(nn.Module):
         tau: float = 1e-3,
         vT_prior_scale: float = 1.0,
         lT_prior_scale: float = 1.0,
+        tf = 1e-3,
         debug: bool = False,
         progress: bool = False,
         progress_desc: Optional[str] = None,
@@ -194,9 +195,13 @@ class KLDM(nn.Module):
         # ------------------------------------------------------------------
         # time schedule: total_time -> 0, shared across all graphs at each step
         # ------------------------------------------------------------------
-        dt = torch.tensor(self.total_time / (n_steps - 1), device=device, dtype=dtype)
-        t_line = torch.linspace(self.total_time, 0, n_steps, device=device, dtype=dtype)
-        t_reverse_list = t_line.view(1, n_steps, 1).expand(num_graphs, -1, -1)  # (num_graph, n_steps, 1)
+        dt = torch.tensor(self.total_time / n_steps, device=device, dtype=dtype)
+        t_line = torch.linspace(self.total_time, 0, n_steps + 1, device=device, dtype=dtype)
+        # print(f"t_line: {t_line}")
+        # print(f"n_steps: {n_steps}")
+        # print(f"total_time: {self.total_time}")
+        # print(f"dt: {dt}")
+        t_reverse_list = t_line.view(1, n_steps + 1, 1).expand(num_graphs, -1, -1)  # (num_graph, n_steps, 1)
 
         l_traj, f_traj, v_traj, t_list = [], [], [], []
         if sample_trajectory or debug:
@@ -206,15 +211,18 @@ class KLDM(nn.Module):
         t_list.append(float(t_reverse_list[0, 0, 0].item()))
 
         step_iter = range(n_steps - 1)
+        # print(f"step_iter: {step_iter}")
         if progress:
-            step_iter = tqdm(step_iter, total=n_steps - 1, desc=progress_desc or "kldm reverse", leave=False)
+            step_iter = tqdm(step_iter, total=n_steps-1, desc=progress_desc or "kldm reverse", leave=False)
 
         for i in step_iter:
             t_g = t_reverse_list[:, i, :]                        # (num_graph, 1)
             t_g_next = t_reverse_list[:, i + 1, :]               # (num_graph, 1) next time step for predictor-corrector
             t_n = t_g[batch_vec]                                 # (N_total, 1)
             t_l = t_g.unsqueeze(-1)                              # (num_graph, 1, 1) broadcasts over lattice
-
+            if t_g.min() < tf: # if the time is less than the floor time, break
+                break
+            
             # ---- joint score at the current state ----
             pred_l, pred_f = score_fn(graph, v_reverse, t_g)
             
@@ -241,17 +249,24 @@ class KLDM(nn.Module):
             # ---- lattice predictor (continuous Euler backward step) ----
             # under predictor_corrector the predictor is the deterministic ODE,
             # matching the velocity predictor above.
+            # if predictor_corrector:
+            #     l_reverse = l_diff.reverse_step_predictor(
+            #         t_l, l_reverse, score_l, dt,
+            #     )
+            # else:
             l_reverse = l_diff.backward_step_euler(
                 l_reverse, t_l, score_l, dt, probability_flow=pf_v,
             )
             graph = self.update_lattice(graph, l_reverse.squeeze(-1))
 
             # ---- predictor-corrector (Langevin) ----
-            if predictor_corrector and i < n_steps - 2:
+            if predictor_corrector and i < n_steps - 1:
+                if t_g_next.min() < tf:
+                    break # if the time is less than the floor time, skip the predictor-corrector
+            # if predictor_corrector:
                 t_n_next = t_g_next[batch_vec]
                 t_l_next = t_g_next.unsqueeze(-1)
-                corr_step_size = tau * (t_g_next ** 2) / (self.total_time ** 2)  # (num_graph, 1)
-                corr_tau_f = float(corr_step_size.mean().item())
+                # print(f"predictor_corrector_n_steps: {predictor_corrector_n_steps}")
                 for _ in range(predictor_corrector_n_steps):
                     score_l, score_f = score_fn(graph, v_reverse, t_g_next)
                     score_l = self._as_lattice_score(score_l)
@@ -260,22 +275,25 @@ class KLDM(nn.Module):
                     if only_correct_vt:
                         v_reverse = f_diff._langevin_corrector_step_graph(
                             graph, v_reverse, t_n_next, batch_vec, dt,
-                            scorev, tau=corr_tau_f, only_correct_vt=True,
+                            scorev, tau, only_correct_vt=True,
                         )
 
                     else:
                         f_reverse, v_reverse = f_diff._langevin_corrector_step_graph(
                             graph, v_reverse, t_n_next, batch_vec, dt,
-                            scorev, tau=corr_tau_f, only_correct_vt=False,
+                            scorev, tau, only_correct_vt=False,
                         )
                         graph = f_diff._update_graph_batch(graph, f_reverse)
                         # lattice corrector shares the same annealed step size
+                    # l_reverse = l_diff.reverse_step_corrector(
+                    #     t_l_next, score_l, tau, index=batch_vec,
+                    # )
                     l_reverse = l_diff.langevin_corrector_step(
-                        l_reverse, t_l_next, score_l, dt, tau=corr_tau_f,
+                        l_reverse, t_l_next, score_l, dt, tau,
                     )
                     graph = self.update_lattice(graph, l_reverse.squeeze(-1))
 
-            t_list.append(float(t_g_next[0, 0].item()))
+            # t_list.append(float(t_g_next[0, 0].item()))
             if sample_trajectory or debug:
                 l_traj.append(l_reverse.squeeze(-1).cpu())
                 f_traj.append(f_reverse.cpu())
@@ -284,10 +302,12 @@ class KLDM(nn.Module):
         l0 = l_reverse.squeeze(-1)
         f0 = f_reverse
 
-        t_arr = torch.tensor(t_list).numpy()
+        # t_arr = torch.tensor(t_list).numpy()
         if debug or sample_trajectory:
-            return l_traj, f_traj, v_traj, t_arr
+            # return l_traj, f_traj, v_traj, t_arr
+            raise NotImplementedError
         return l0, f0
+
 
     @staticmethod
     def _as_lattice_score(score_l: torch.Tensor) -> torch.Tensor:
