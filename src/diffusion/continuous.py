@@ -176,10 +176,10 @@ class ContinuousDiffusion(BaseDiffusion):
     ):
         if probability_flow:
             # probability flow ODE: deterministic, no diffusion noise term
-            xt_next = xt + self.sde.reverse_drift(xt, t, score, eta=0) * (-dt)
+            xt_next = xt + self.sde.reverse_drift(xt, t, score, eta=0) * (dt)
         else:
             dW = torch.sqrt(dt) * torch.randn_like(xt)
-            xt_next = xt + self.sde.reverse_drift(xt, t, score) * (-dt) + self.sde.diffusion(xt, t) * dW
+            xt_next = xt + self.sde.reverse_drift(xt, t, score) * (dt) + self.sde.diffusion(xt, t) * dW
         return xt_next
 
     def backward_step_exp(

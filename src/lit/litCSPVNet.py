@@ -7,7 +7,7 @@ from src.metrics.csp import CSPMetrics
 from src.dataLib.data_util import kldm_output_to_structures_batch
 from src.diffusion.kldm import KLDM
 from src.dataLib.data_util import PyGData_to_Structure
-
+import torch_geometric.transforms as PyGT
 
 def time_loss_weight(t: torch.Tensor, total_time: float) -> torch.Tensor:
     t_norm = (t / total_time).clamp(0.0, 1.0)
@@ -58,6 +58,7 @@ class LitCSPVNet(L.LightningModule):
         lr: float = 1e-3,
         lambda_l: float = 1.0,
         lambda_f: float = 1.0,
+        transform: PyGT.Compose = None,
         matcher_kwargs: Optional[dict] = None,
     ):
         super().__init__()
@@ -69,6 +70,7 @@ class LitCSPVNet(L.LightningModule):
         self.lr = lr
         self.lambda_l = lambda_l
         self.lambda_f = lambda_f
+        self.transform = transform
         self._train_loss = []
         self._val_metrics = CSPMetrics(**(matcher_kwargs or {}))
         self._test_metrics = CSPMetrics(**(matcher_kwargs or {}))
@@ -151,10 +153,11 @@ class LitCSPVNet(L.LightningModule):
         self._val_metrics.reset()
 
     def validation_step(self, batch: Data) -> None:
-        target_structures = [PyGData_to_Structure(batch[j]) for j in range(batch.num_graphs)]
+        transform_lengths, transform_angles, transform_pos = self.transform.transforms[0], self.transform.transforms[1], self.transform.transforms[2]
+        target_structures = [PyGData_to_Structure(batch[j], transform_lengths, transform_angles, transform_pos) for j in range(batch.num_graphs)]
         gen_l0, gen_f0 = self.sample(batch)
         self._val_metrics.update(
-            kldm_output_to_structures(batch, gen_l0, gen_f0), target_structures
+            kldm_output_to_structures_batch(batch, gen_l0, gen_f0, transform_lengths, transform_angles, transform_pos), target_structures
         )
 
     def on_validation_epoch_end(self):
@@ -165,10 +168,11 @@ class LitCSPVNet(L.LightningModule):
         self._test_metrics.reset()
 
     def test_step(self, batch: Data) -> None:
-        target_structures = [PyGData_to_Structure(batch[j]) for j in range(batch.num_graphs)]
+        transform_lengths, transform_angles, transform_pos = self.transform.transforms[0], self.transform.transforms[1], self.transform.transforms[2]
+        target_structures = [PyGData_to_Structure(batch[j], transform_lengths, transform_angles, transform_pos) for j in range(batch.num_graphs)]
         gen_l0, gen_f0 = self.sample(batch)
         self._test_metrics.update(
-            kldm_output_to_structures(batch, gen_l0, gen_f0), target_structures
+            kldm_output_to_structures_batch(batch, gen_l0, gen_f0, transform_lengths, transform_angles, transform_pos), target_structures
         )
 
     def on_test_epoch_end(self):

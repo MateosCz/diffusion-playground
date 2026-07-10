@@ -27,7 +27,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from tqdm.auto import tqdm
 
 from src.dataLib.realCrystal import CrystalDataset
-from src.dataLib.data_util import PyGData_to_Structure, kldm_output_to_structures
+from src.dataLib.data_util import PyGData_to_Structure, kldm_output_to_structures_batch
 from src.metrics.csp import CSPMetrics
 from src.litTrain.trainLitKLDM import (
     build_transform,
@@ -45,7 +45,7 @@ DEFAULT_CKPT_GLOB = f"checkpoints/*/CSPVNet_KLDM_{dataset_name}_*/*.ckpt"
 
 # Reverse-diffusion sampling on CPU is robust and avoids missing MPS/CUDA TDM
 # kernels; override with --device if you have full GPU kernel coverage.
-DEFAULT_DEVICE = "cuda"
+DEFAULT_DEVICE = "mps"
 
 # StructureMatcher tolerances used for the CSP match rate (DiffCSP/CDVAE style).
 MATCHER_KWARGS = dict(stol=0.5, angle_tol=10.0, ltol=0.3)
@@ -123,6 +123,8 @@ def evaluate(
     device = torch.device(device_str)
 
     transform = build_transform()
+
+    transform_lengths, transform_angles, transform_pos = transform.transforms[0], transform.transforms[1], transform.transforms[2]
     ds_path = os.path.join(data_folder, f"{split}.pt")
     dataset = CrystalDataset(path=ds_path, transform=transform)
     loader = PyGDataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -143,14 +145,15 @@ def evaluate(
 
         # Ground truth is read from the (unmodified) conditioning batch; the atom
         # types / counts are what we condition the generation on.
-        target_structures = [PyGData_to_Structure(batch[j]) for j in range(batch.num_graphs)]
+        target_structures = [PyGData_to_Structure(batch[j], transform_lengths, transform_angles, transform_pos) for j in range(batch.num_graphs)]
         l0, f0 = lit.kldm.sample_backward(
             graphT=batch,
             score_fn=lit.forward_from_data,
             seed=seed,
             **sample_kwargs,
         )
-        gen_structures = kldm_output_to_structures(batch, l0, f0)
+
+        gen_structures = kldm_output_to_structures_batch(batch, l0, f0, transform_lengths, transform_angles, transform_pos)
 
         metrics.update(gen_structures, target_structures)
         summary = metrics.summarize()

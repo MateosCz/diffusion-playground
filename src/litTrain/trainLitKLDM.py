@@ -83,15 +83,16 @@ def read_lengths_loc_scale() -> dict:
 
 
 def build_transform() -> PyGT.Compose:
+
     mean_std_stats = read_lengths_loc_scale()
     return PyGT.Compose(
         [
             T.ContinuousIntervalLengths(in_key="lengths", out_key="lengths", lengths_loc_scale= f"{data_folder}/train_mean_std_stats.json"),
             T.ContinuousIntervalAngles(in_key="angles", out_key="angles",angles_loc_scale= (0.0, 0.35) ),
+            T.Pos2Angle(in_key="pos", out_key="pos"),
             T.FullyConnectedGraph(key="edge_index", len_from="pos"),
             # lattice vector l = (log a, log b, log c, tan alpha, tan beta, tan gamma)
             T.ConcatFeatures(in_keys=["lengths", "angles"], out_key="l"),
-            T.Pos2Angle(in_key="pos", out_key="pos"),
             # crystal data is stored in float64; match float32 network weights
             T.CastFloating(dtype=torch.float32),
             

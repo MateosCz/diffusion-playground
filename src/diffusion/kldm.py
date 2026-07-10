@@ -289,11 +289,11 @@ class KLDM(nn.Module):
                     #     t_l_next, score_l, tau, index=batch_vec,
                     # )
                     l_reverse = l_diff.langevin_corrector_step(
-                        l_reverse, t_l_next, score_l, dt, tau,
+                        l_reverse, score_l, dt, tau,
                     )
                     graph = self.update_lattice(graph, l_reverse.squeeze(-1))
 
-            # t_list.append(float(t_g_next[0, 0].item()))
+            t_list.append(float(t_g_next[0, 0].item()))
             if sample_trajectory or debug:
                 l_traj.append(l_reverse.squeeze(-1).cpu())
                 f_traj.append(f_reverse.cpu())
@@ -302,10 +302,10 @@ class KLDM(nn.Module):
         l0 = l_reverse.squeeze(-1)
         f0 = f_reverse
 
-        # t_arr = torch.tensor(t_list).numpy()
+        t_arr = torch.tensor(t_list).numpy()
         if debug or sample_trajectory:
-            # return l_traj, f_traj, v_traj, t_arr
-            raise NotImplementedError
+            return l_traj, f_traj, v_traj, t_arr
+            # raise NotImplementedError
         return l0, f0
 
 
