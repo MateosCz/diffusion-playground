@@ -2,3 +2,7 @@
 __pycache__/
 wandb_logs/
 src/__pycache__/
+*.s
+*.out
+data/*/*.pt
+/checkpoints/

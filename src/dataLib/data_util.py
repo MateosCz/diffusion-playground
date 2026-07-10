@@ -150,6 +150,9 @@ def kldm_output_to_structures(graph: Data, l0: torch.Tensor, f0: torch.Tensor):
     f0 = f0.detach().cpu()
     l0 = l0.detach().cpu()
 
+    # recover transformed lattice and positions
+    
+
     structures = []
     for g in range(int(batch_vec.max().item()) + 1):
         mask = batch_vec == g
