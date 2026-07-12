@@ -35,7 +35,7 @@ from src.device import get_default_device, get_lightning_accelerator
 # --------------------------------------------------------------------------- #
 total_time = 2.0
 dim = 3
-n_epoch = 1000
+n_epoch = 3000
 lr = 1e-3
 batch_size = 256
 num_workers = 1
@@ -47,9 +47,10 @@ diffusion_kwargs = {
     "t_dist_kw": "uniform",
     "t_min": 5e-3,
     "shared_time": True,  # single per-graph time shared by lattice + coords
+    "l_parameterization": "noise", # lattice diffusion parameterization
 }
 sample_kwargs = {
-    "n_steps": 300,
+    "n_steps": 100,
     "evaluate_batch_size": 64,
     "predictor_corrector": False,
     "predictor_corrector_n_steps": 0,
@@ -69,6 +70,7 @@ nn_kwargs = {
     "pred_l": True,
     "pred_v": True,
     "zero_cog": True,
+    "zero_cog_score": False,
 }
 
 lit_kwargs = {
@@ -126,9 +128,10 @@ def build_kldm() -> KLDM:
         simplified_param=True,
         n_sigma_rs=2000,
         zero_cog=nn_kwargs["zero_cog"],
+        zero_cog_score=nn_kwargs["zero_cog_score"],
     )
     l_sde = VPSDE(schedule=LinearSchedule(beta_min=0.1, beta_max=20.0))
-    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="eps")
+    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization=diffusion_kwargs["l_parameterization"])
     return KLDM(
         l_diffusion=diffusion_l,
         f_diffusion=diffusion_f,
@@ -178,7 +181,7 @@ def main():
         transform=transform,
     )
 
-    experiment_name = f"CSPVNet_KLDM_{dataset_name}_no_h"
+    experiment_name = f"CSPVNet_KLDM_{dataset_name}_{diffusion_kwargs['l_parameterization']}"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
@@ -201,7 +204,7 @@ def main():
         max_epochs=n_epoch,
         accelerator=accelerator,
         log_every_n_steps=32,
-        check_val_every_n_epoch=20,  # CSP sampling eval is expensive; run it every 10 epochs
+        check_val_every_n_epoch=50,  # CSP sampling eval is expensive; run it every 10 epochs
         gradient_clip_val=1.0,  # match the hand-written loops; prevents score-matching blow-ups
         callbacks=[checkpoint_callback],
     )

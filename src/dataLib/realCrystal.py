@@ -6,9 +6,12 @@ import torch
 import torch.utils.data as torchdata
 from ase.data import atomic_numbers
 from torch_geometric.data import Data
+from torch_geometric.data.data import DataEdgeAttr
+
 from torch_geometric.io import fs
 
-
+import torch.serialization
+torch.serialization.add_safe_globals([DataEdgeAttr])
 
 class CrystalDataset(torchdata.Dataset):
     def __init__(

@@ -176,10 +176,10 @@ class ContinuousDiffusion(BaseDiffusion):
     ):
         if probability_flow:
             # probability flow ODE: deterministic, no diffusion noise term
-            xt_next = xt + self.sde.reverse_drift(xt, t, score, eta=0) * (dt)
+            xt_next = xt + self.sde.reverse_drift(xt, t, score, eta=0) * (-dt)
         else:
             dW = torch.sqrt(dt) * torch.randn_like(xt)
-            xt_next = xt + self.sde.reverse_drift(xt, t, score) * (dt) + self.sde.diffusion(xt, t) * dW
+            xt_next = xt + self.sde.reverse_drift(xt, t, score) * (-dt) + self.sde.diffusion(xt, t) * dW
         return xt_next
 
     def backward_step_exp(
@@ -199,32 +199,43 @@ class ContinuousDiffusion(BaseDiffusion):
         return xt_next
     
     
-
-
     def langevin_corrector_step(
         self,
         xt: torch.Tensor,
         score: torch.Tensor,
         dt: torch.Tensor,
         tau: float = 0.25,
-        index: Optional[torch.Tensor] = None,
     ):
-        if index is None:
-            denom = score.square().mean(dim=-1, keepdim=True)
-            delta = tau / denom
-        else:
-            from torch_geometric.utils import scatter
-            denom = scatter(
-                score.square().mean(dim=-1, keepdim=True),
-                index,
-                dim=0,
-                reduce="mean",
-            )
-            delta = tau / denom[index]
+
         eps = torch.randn_like(xt)
-        tau_t = torch.as_tensor(delta, device=xt.device, dtype=xt.dtype)
+        tau_t = torch.as_tensor(tau, device=xt.device, dtype=xt.dtype)
         xt_corrected = xt + tau_t * score * dt + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
         return xt_corrected
+
+    # def langevin_corrector_step(
+    #     self,
+    #     xt: torch.Tensor,
+    #     score: torch.Tensor,
+    #     dt: torch.Tensor,
+    #     tau: float = 0.25,
+    #     index: Optional[torch.Tensor] = None,
+    # ):
+    #     if index is None:
+    #         denom = score.square().mean(dim=-1, keepdim=True)
+    #         delta = tau / denom
+    #     else:
+    #         from torch_geometric.utils import scatter
+    #         denom = scatter(
+    #             score.square().mean(dim=-1, keepdim=True),
+    #             index,
+    #             dim=0,
+    #             reduce="mean",
+    #         )
+    #         delta = tau / denom[index]
+    #     eps = torch.randn_like(xt)
+    #     tau_t = torch.as_tensor(delta, device=xt.device, dtype=xt.dtype)
+    #     xt_corrected = xt + tau_t * score * dt + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
+    #     return xt_corrected
         
     def tweedie_step(
         self,

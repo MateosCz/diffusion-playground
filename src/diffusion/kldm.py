@@ -114,7 +114,7 @@ class KLDM(nn.Module):
         predictor_corrector: bool = False,
         predictor_corrector_n_steps: int = 1,
         only_correct_vt: bool = True,
-        tau: float = 1e-3,
+        tau: float = 1e-4,
         vT_prior_scale: float = 1.0,
         lT_prior_scale: float = 1.0,
         tf = 1e-3,
@@ -257,6 +257,7 @@ class KLDM(nn.Module):
             l_reverse = l_diff.backward_step_euler(
                 l_reverse, t_l, score_l, dt, probability_flow=pf_v,
             )
+
             graph = self.update_lattice(graph, l_reverse.squeeze(-1))
 
             # ---- predictor-corrector (Langevin) ----
