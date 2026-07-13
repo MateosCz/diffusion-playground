@@ -199,18 +199,46 @@ class ContinuousDiffusion(BaseDiffusion):
         return xt_next
     
     
+    # def langevin_corrector_step(
+    #     self,
+    #     xt: torch.Tensor,
+    #     score: torch.Tensor,
+    #     tau: float = 0.25,
+    # ):
+
+    #     eps = torch.randn_like(xt)
+    #     tau_t = torch.as_tensor(tau, device=xt.device, dtype=xt.dtype)
+    #     xt_corrected = xt + tau_t * score + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
+    #     return xt_corrected
+
     def langevin_corrector_step(
         self,
         xt: torch.Tensor,
         score: torch.Tensor,
-        dt: torch.Tensor,
-        tau: float = 0.25,
+        tau: float = 0.01,
+        index: Optional[torch.Tensor] = None,
     ):
+        """
+        Score-norm-adaptive Langevin corrector (KLDM Alg. 4 / Song SNR rule).
 
+        delta = tau / mean(score^2)  =>  drift ~ tau/||s||  and  noise ~ sqrt(2*tau)/||s||
+        shrink together, so the chain stays in detailed balance w.r.t. p_t across
+        the whole time range. A fixed delta does not, and the noise term dominates.
+        """
+        if index is None:
+            # one row per sample (e.g. lattice, shape (num_graph, 6, 1)):
+            # reduce over ALL non-batch dims -> one delta per graph.
+            denom = score.square().flatten(1).mean(dim=1)
+            denom = denom.view(-1, *([1] * (xt.ndim - 1)))
+        else:
+            from torch_geometric.utils import scatter
+            denom = scatter(
+                score.square().mean(dim=-1, keepdim=True), index, dim=0, reduce="mean"
+            )[index]
+
+        delta = tau / denom.clamp_min(1e-12)
         eps = torch.randn_like(xt)
-        tau_t = torch.as_tensor(tau, device=xt.device, dtype=xt.dtype)
-        xt_corrected = xt + tau_t * score * dt + torch.sqrt(2 * tau_t) * eps # Langevin corrector step
-        return xt_corrected
+        return xt + delta * score + torch.sqrt(2 * delta) * eps
 
     # def langevin_corrector_step(
     #     self,
