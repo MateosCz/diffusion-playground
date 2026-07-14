@@ -114,7 +114,8 @@ class KLDM(nn.Module):
         predictor_corrector: bool = False,
         predictor_corrector_n_steps: int = 1,
         only_correct_vt: bool = True,
-        tau: float = 1e-3,
+        tau_v: float = 9e-2,
+        tau_l: float = 9e-2,
         vT_prior_scale: float = 1.0,
         lT_prior_scale: float = 1.0,
         tf = 1e-3,
@@ -214,85 +215,44 @@ class KLDM(nn.Module):
         # print(f"step_iter: {step_iter}")
         if progress:
             step_iter = tqdm(step_iter, total=n_steps-1, desc=progress_desc or "kldm reverse", leave=False)
-
         for i in step_iter:
-            t_g = t_reverse_list[:, i, :]                        # (num_graph, 1)
-            t_g_next = t_reverse_list[:, i + 1, :]               # (num_graph, 1) next time step for predictor-corrector
-            t_n = t_g[batch_vec]                                 # (N_total, 1)
-            t_l = t_g.unsqueeze(-1)                              # (num_graph, 1, 1) broadcasts over lattice
-            if t_g.min() < tf: # if the time is less than the floor time, break
-                break
-            
-            # ---- joint score at the current state ----
+            t_g, t_g_next = t_reverse_list[:, i, :], t_reverse_list[:, i + 1, :]
+            t_n, t_l = t_g[batch_vec], t_g.unsqueeze(-1)
+
+            # ---------------- PREDICTOR ----------------
             pred_l, pred_f = score_fn(graph, v_reverse, t_g)
-            
-            score_l = self._as_lattice_score(pred_l)           # (num_graph, 6, 1)
-            # map the raw network prediction (score / x0 / noise) to an actual
-            # score; use t_l (num_graph, 1, 1) so it broadcasts over l_reverse.
-            score_l = self.l_diffusion.construct_score(t_l, l_reverse, score_l)
-            # ---- velocity predictor (TDM) ----
-            scorev = f_diff._construct_scorev(pred_f, v_reverse, t_n)
+            score_l = l_diff.construct_score(t_l, l_reverse, self._as_lattice_score(pred_l))
+            scorev  = f_diff._construct_scorev(pred_f, v_reverse, t_n)
+
             pf_v = probability_flow or predictor_corrector
-            if exponential_integration:
-                v_reverse = f_diff.backward_vstep_exp_graph(
-                    v_reverse, t_n, batch_vec, dt, scorev, probability_flow=pf_v,
-                )
-            else:
-                v_reverse = f_diff.backward_vstep_euler_graph(
-                    v_reverse, t_n, batch_vec, dt, scorev, probability_flow=pf_v,
-                )
-
-            # ---- position predictor (TDM) ----
-            f_reverse = f_diff.backward_fstep_graph(f_reverse, v_reverse, dt)
-            graph = f_diff._update_graph_batch(graph, f_reverse)
-
-            # ---- lattice predictor (continuous Euler backward step) ----
-            # under predictor_corrector the predictor is the deterministic ODE,
-            # matching the velocity predictor above.
-            # if predictor_corrector:
-            #     l_reverse = l_diff.reverse_step_predictor(
-            #         t_l, l_reverse, score_l, dt,
-            #     )
-            # else:
+            v_reverse = f_diff.backward_vstep_exp_graph(
+                v_reverse, t_n, batch_vec, dt, scorev, probability_flow=pf_v)
             l_reverse = l_diff.backward_step_euler(
-                l_reverse, t_l, score_l, dt, probability_flow=pf_v,
-            )
+                l_reverse, t_l, score_l, dt, probability_flow=pf_v)
             graph = self.update_lattice(graph, l_reverse.squeeze(-1))
 
-            # ---- predictor-corrector (Langevin) ----
-            if predictor_corrector and i < n_steps - 1:
-                if t_g_next.min() < tf:
-                    break # if the time is less than the floor time, skip the predictor-corrector
-            # if predictor_corrector:
-                t_n_next = t_g_next[batch_vec]
-                t_l_next = t_g_next.unsqueeze(-1)
-                # print(f"predictor_corrector_n_steps: {predictor_corrector_n_steps}")
+            # ---------------- CORRECTOR (t fixed at t_next) ----------------
+            if predictor_corrector:
+                t_n_next, t_l_next = t_g_next[batch_vec], t_g_next.unsqueeze(-1)
                 for _ in range(predictor_corrector_n_steps):
-                    score_l, score_f = score_fn(graph, v_reverse, t_g_next)
-                    score_l = self._as_lattice_score(score_l)
-                    score_l = self.l_diffusion.construct_score(t_l_next, l_reverse, score_l)
-                    scorev = f_diff._construct_scorev(score_f, v_reverse, t_n_next)
-                    if only_correct_vt:
-                        v_reverse = f_diff._langevin_corrector_step_graph(
-                            graph, v_reverse, t_n_next, batch_vec, dt,
-                            scorev, tau, only_correct_vt=True,
-                        )
+                    pred_l, pred_f = score_fn(graph, v_reverse, t_g_next)
 
-                    else:
-                        f_reverse, v_reverse = f_diff._langevin_corrector_step_graph(
-                            graph, v_reverse, t_n_next, batch_vec, dt,
-                            scorev, tau, only_correct_vt=False,
-                        )
-                        graph = f_diff._update_graph_batch(graph, f_reverse)
-                        # lattice corrector shares the same annealed step size
-                    # l_reverse = l_diff.reverse_step_corrector(
-                    #     t_l_next, score_l, tau, index=batch_vec,
-                    # )
-                    l_reverse = l_diff.langevin_corrector_step(
-                        l_reverse, score_l, dt, tau,
+                    scorev = f_diff._construct_scorev(pred_f, v_reverse, t_n_next)
+                    v_reverse = f_diff._langevin_corrector_step_graph(
+                        graph, v_reverse, t_n_next, batch_vec, dt, scorev,
+                        tau=tau_v, only_correct_vt=True,      # never move f here
+                    )
+
+                    score_l = l_diff.construct_score(
+                        t_l_next, l_reverse, self._as_lattice_score(pred_l))
+                    l_reverse = l_diff.langevin_corrector_step(   # <- the SNR one, not langevin_corrector_step
+                        xt=l_reverse, score=score_l, tau=tau_l,
                     )
                     graph = self.update_lattice(graph, l_reverse.squeeze(-1))
 
+            # ---------------- POSITION: integrated exactly ONCE, with corrected v ----------------
+            f_reverse = f_diff.backward_fstep_graph(f_reverse, v_reverse, dt)
+            graph = f_diff._update_graph_batch(graph, f_reverse)
             t_list.append(float(t_g_next[0, 0].item()))
             if sample_trajectory or debug:
                 l_traj.append(l_reverse.squeeze(-1).cpu())

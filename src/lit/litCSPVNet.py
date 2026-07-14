@@ -133,8 +133,10 @@ class LitCSPVNet(L.LightningModule):
         t_graph_l = t_dict["l"]                      # (num_graph, 1)
         t_node_f = t_dict["f"][batch.batch]          # (N_total, 1)
 
-        loss_l = weighted_score_loss(pred_l, target_l, t_graph_l, total_time)
-        loss_f = weighted_score_loss(pred_f, target_f, t_node_f, total_time)
+        # loss_l = weighted_score_loss(pred_l, target_l, t_graph_l, total_time)
+        # loss_f = weighted_score_loss(pred_f, target_f, t_node_f, total_time)
+        loss_l = self.kldm.l_diffusion.loss_diffusion(pred_l, target_l, t_graph_l)
+        loss_f = self.kldm.f_diffusion.loss_diffusion(pred_f, target_f, t_node_f)
         loss = self.lambda_l * loss_l + self.lambda_f * loss_f
 
         self.log_dict(

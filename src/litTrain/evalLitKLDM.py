@@ -45,7 +45,7 @@ DEFAULT_CKPT_GLOB = f"checkpoints/*/CSPVNet_KLDM_{dataset_name}_*/*.ckpt"
 
 # Reverse-diffusion sampling on CPU is robust and avoids missing MPS/CUDA TDM
 # kernels; override with --device if you have full GPU kernel coverage.
-DEFAULT_DEVICE = "cpu"
+DEFAULT_DEVICE = "cuda"
 
 # StructureMatcher tolerances used for the CSP match rate (DiffCSP/CDVAE style).
 MATCHER_KWARGS = dict(stol=0.5, angle_tol=10.0, ltol=0.3)
@@ -131,18 +131,11 @@ def load_lit_model(ckpt_path: str, device: torch.device) -> LitCSPVNet:
         model=model,
         kldm=kldm,
         map_location=device,
+        weights_only=False
     )
     lit.eval()
     lit.to(device)
     return lit
-
-
-def _cast_floats(graph: Data) -> Data:
-    """Match float32 network weights (carbon-24 is stored in float64)."""
-    for key, val in list(graph.items()):
-        if torch.is_tensor(val) and torch.is_floating_point(val):
-            graph[key] = val.float()
-    return graph
 
 
 @torch.inference_mode()
@@ -191,7 +184,7 @@ def evaluate(
         if max_batches is not None and i >= max_batches:
             break
 
-        # batch = _cast_floats(batch.to(device))
+        batch = batch.to(device)
 
         # Ground truth is read from the (unmodified) conditioning batch; the atom
         # types / counts are what we condition the generation on.

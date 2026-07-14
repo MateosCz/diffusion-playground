@@ -934,29 +934,54 @@ class TDMDiffusion(BaseDiffusion):
         ft_reverse = wrap_angle(ft_reverse)
         return ft_reverse
 
-
+    @torch.no_grad()
     def _langevin_corrector_step_graph(
-        self,
-        graph: Data,
-        vt_reverse: torch.Tensor,
-        t_n: torch.Tensor, # (N_total, 1) time for each node
-        batch_vec: torch.Tensor,
-        dt: torch.Tensor,
-        score: torch.Tensor, # (N_total, 2) score for each node
-        tau: float = 0.25,
-        only_correct_vt: bool = False,
+        self, graph, vt_reverse, t_n, batch_vec, dt, scorev,
+        tau: float = 0.01, only_correct_vt: bool = True, ft_reverse=None,
     ):
-        """Langevin corrector step operating on node-level tensors."""
-        
-        tau_t = torch.tensor(tau, device=vt_reverse.device, dtype=vt_reverse.dtype)
+        """Score-norm-adaptive Langevin corrector (KLDM Alg. 4 / Song SNR rule)."""
+        from torch_geometric.utils import scatter
+
+        # per-graph δ = τ / mean(s²)   <- NOT a fixed tau
+        denom = scatter(
+            scorev.square().mean(dim=-1, keepdim=True), batch_vec, dim=0, reduce="mean"
+        )                                   # (num_graphs, 1)
+        delta = (tau / denom.clamp_min(1e-12))[batch_vec]   # (N, 1)
+
         eps_v = torch.randn_like(vt_reverse)
         if self.zero_cog:
-            eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
-        vt_reverse = vt_reverse + tau_t * score + torch.sqrt(2 * tau_t) * eps_v
-        if not only_correct_vt:
-            ft_reverse = wrap_angle(graph.x - dt * vt_reverse)
-            return ft_reverse, vt_reverse
-        return vt_reverse
+            eps_v = scatter_center(eps_v, batch_vec)
+
+        vt_reverse = vt_reverse + delta * scorev + torch.sqrt(2 * delta) * eps_v
+        if self.zero_cog:
+            vt_reverse = scatter_center(vt_reverse, batch_vec)
+
+        if only_correct_vt or ft_reverse is None:
+            return vt_reverse
+        return wrap_angle(ft_reverse - dt * vt_reverse), vt_reverse
+
+    # def _langevin_corrector_step_graph(
+    #     self,
+    #     graph: Data,
+    #     vt_reverse: torch.Tensor,
+    #     t_n: torch.Tensor, # (N_total, 1) time for each node
+    #     batch_vec: torch.Tensor,
+    #     dt: torch.Tensor,
+    #     score: torch.Tensor, # (N_total, 2) score for each node
+    #     tau: float = 0.25,
+    #     only_correct_vt: bool = False,
+    # ):
+    #     """Langevin corrector step operating on node-level tensors."""
+        
+    #     tau_t = torch.tensor(tau, device=vt_reverse.device, dtype=vt_reverse.dtype)
+    #     eps_v = torch.randn_like(vt_reverse)
+    #     if self.zero_cog:
+    #         eps_v = scatter_center(eps_v, batch_vec) # remove translational motion of noise
+    #     vt_reverse = vt_reverse + tau_t * score + torch.sqrt(2 * tau_t) * eps_v
+    #     if not only_correct_vt:
+    #         ft_reverse = wrap_angle(graph.x - dt * vt_reverse)
+    #         return ft_reverse, vt_reverse
+    #     return vt_reverse
 
     """
     Graph utilities
