@@ -60,6 +60,8 @@ class LitCSPVNet(L.LightningModule):
         lambda_f: float = 1.0,
         transform: PyGT.Compose = None,
         matcher_kwargs: Optional[dict] = None,
+        n_t_bins: int = 10,
+        t_bucket_repeats: int = 4,
     ):
         super().__init__()
         self.model = model
@@ -71,9 +73,13 @@ class LitCSPVNet(L.LightningModule):
         self.lambda_l = lambda_l
         self.lambda_f = lambda_f
         self.transform = transform
+        # per-t-bucket validation diagnostics
+        self.n_t_bins = n_t_bins
+        self.t_bucket_repeats = t_bucket_repeats
         self._train_loss = []
         self._val_metrics = CSPMetrics(**(matcher_kwargs or {}))
         self._test_metrics = CSPMetrics(**(matcher_kwargs or {}))
+        self._reset_t_buckets()
         self.save_hyperparameters(ignore=["model", "kldm"])
 
     def forward_from_data(
@@ -144,6 +150,89 @@ class LitCSPVNet(L.LightningModule):
         )
         return loss
 
+    # ------------------------------------------------------------------
+    # Per-t-bucket validation error
+    # ------------------------------------------------------------------
+    # Records the *raw*, un-weighted prediction error split into noise-level
+    # bands, so we can see which part of the diffusion trajectory the network
+    # fits badly -- decoupled from the training-time ``time_loss_weight``.
+    # Lattice: x0-error (parameterization="x0"); coords: score-error.
+    def _reset_t_buckets(self) -> None:
+        n = self.n_t_bins
+        self._t_bucket_l_sqerr = torch.zeros(n)
+        self._t_bucket_l_count = torch.zeros(n)
+        self._t_bucket_f_sqerr = torch.zeros(n)
+        self._t_bucket_f_count = torch.zeros(n)
+
+    def _t_bucket_index(self, t: torch.Tensor) -> torch.Tensor:
+        """Map per-sample times (any shape) to bin indices in [0, n_t_bins)."""
+        t_min = self.diffusion_kwargs.get("t_min", 5e-3)
+        total_time = self.kldm.total_time
+        frac = ((t.reshape(-1) - t_min) / (total_time - t_min)).clamp(0.0, 1.0 - 1e-6)
+        return (frac * self.n_t_bins).long()
+
+    def _accumulate_t_buckets(
+        self,
+        t: torch.Tensor,
+        sqerr: torch.Tensor,
+        sq_accum: torch.Tensor,
+        count_accum: torch.Tensor,
+    ) -> None:
+        idx = self._t_bucket_index(t).cpu()
+        sqerr = sqerr.detach().reshape(-1).cpu().float()
+        sq_accum.index_add_(0, idx, sqerr)
+        count_accum.index_add_(0, idx, torch.ones_like(sqerr))
+
+    @torch.no_grad()
+    def _update_t_buckets_from_batch(self, batch: Data) -> None:
+        """Freshly noise ``batch`` a few times and bucket the raw error by t."""
+        for _ in range(self.t_bucket_repeats):
+            (noised_v, noised_graph), score_dict, t_dict = self.kldm.sample_forward(
+                graph0=batch,
+                t_min=self.diffusion_kwargs.get("t_min", 5e-3),
+                t_dist_kw=self.diffusion_kwargs.get("t_dist_kw", "uniform"),
+                shared_time=self.diffusion_kwargs.get("shared_time", True),
+                return_time=True,
+            )
+            pred_l, pred_f = self.forward_from_data(noised_graph, noised_v, t_dict["f"])
+
+            target_l = score_dict["l"].squeeze(-1)           # (num_graph, 6)
+            target_f = score_dict["f"]                        # (N_total, dim)
+            err_l = (pred_l - target_l).pow(2).mean(dim=-1)   # (num_graph,)
+            err_f = (pred_f - target_f).pow(2).mean(dim=-1)   # (N_total,)
+
+            t_l = t_dict["l"]                                 # (num_graph, 1)
+            t_f = t_dict["f"][batch.batch]                    # (N_total, 1)
+            self._accumulate_t_buckets(t_l, err_l, self._t_bucket_l_sqerr, self._t_bucket_l_count)
+            self._accumulate_t_buckets(t_f, err_f, self._t_bucket_f_sqerr, self._t_bucket_f_count)
+
+    def _log_t_buckets(self) -> None:
+        t_min = self.diffusion_kwargs.get("t_min", 5e-3)
+        total_time = self.kldm.total_time
+        edges = torch.linspace(t_min, total_time, self.n_t_bins + 1)
+        mean_l = self._t_bucket_l_sqerr / self._t_bucket_l_count.clamp_min(1.0)
+        mean_f = self._t_bucket_f_sqerr / self._t_bucket_f_count.clamp_min(1.0)
+
+        logs = {}
+        for i in range(self.n_t_bins):
+            if self._t_bucket_l_count[i] > 0:
+                logs[f"val_terr/l_bin{i:02d}"] = mean_l[i]
+            if self._t_bucket_f_count[i] > 0:
+                logs[f"val_terr/f_bin{i:02d}"] = mean_f[i]
+        if logs:
+            self.log_dict(logs)
+
+        # human-readable table (bin -> [t_lo, t_hi) mapping is otherwise opaque)
+        if self.trainer is not None and self.trainer.is_global_zero:
+            print("\n[val per-t error]  bin  [t_lo,  t_hi)   err_l (n)          err_f (n)")
+            for i in range(self.n_t_bins):
+                lo, hi = edges[i].item(), edges[i + 1].item()
+                cl, cf = int(self._t_bucket_l_count[i]), int(self._t_bucket_f_count[i])
+                print(
+                    f"  {i:02d}: [{lo:5.3f},{hi:5.3f})  "
+                    f"l={mean_l[i]:.4e} (n={cl:5d})  f={mean_f[i]:.4e} (n={cf:5d})"
+                )
+
     def training_step(self, batch: Data) -> torch.Tensor:
         loss = self._shared_step(batch, "train")
         self._train_loss.append(loss.detach())
@@ -151,8 +240,12 @@ class LitCSPVNet(L.LightningModule):
 
     def on_validation_epoch_start(self):
         self._val_metrics.reset()
+        self._reset_t_buckets()
 
     def validation_step(self, batch: Data) -> None:
+        # raw per-t-bucket error (cheap forward passes on freshly noised data)
+        self._update_t_buckets_from_batch(batch)
+
         transform_lengths, transform_angles, transform_pos = self.transform.transforms[0], self.transform.transforms[1], self.transform.transforms[2]
         target_structures = [PyGData_to_Structure(batch[j], transform_lengths, transform_angles, transform_pos) for j in range(batch.num_graphs)]
         gen_l0, gen_f0 = self.sample(batch)
@@ -163,6 +256,7 @@ class LitCSPVNet(L.LightningModule):
     def on_validation_epoch_end(self):
         summary = self._val_metrics.summarize()
         self.log_dict({f"val/{k}": v for k, v in summary.items()})
+        self._log_t_buckets()
 
     def on_test_epoch_start(self):
         self._test_metrics.reset()

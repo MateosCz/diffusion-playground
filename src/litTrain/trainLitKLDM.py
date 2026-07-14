@@ -128,7 +128,7 @@ def build_kldm() -> KLDM:
         zero_cog=nn_kwargs["zero_cog"],
     )
     l_sde = VPSDE(schedule=LinearSchedule(beta_min=0.1, beta_max=20.0))
-    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="eps")
+    diffusion_l = ContinuousDiffusion(sde=l_sde, total_time=total_time, parameterization="x0")
     return KLDM(
         l_diffusion=diffusion_l,
         f_diffusion=diffusion_f,
