@@ -111,6 +111,45 @@ def resolve_sample_kwargs(
     return kwargs
 
 
+def summarize_t_buckets(lit: LitCSPVNet) -> dict:
+    """Read the per-t-bucket error accumulators off a ``LitCSPVNet``.
+
+    Returns a plain dict (bin edges + per-bin mean error and counts) so the
+    breakdown can be printed and/or persisted without a Lightning trainer.
+    Lattice error is x0-MSE (parameterization="x0"); coord error is score-MSE.
+    """
+    t_min = lit.diffusion_kwargs.get("t_min", 5e-3)
+    total_time = lit.kldm.total_time
+    n = lit.n_t_bins
+    edges = torch.linspace(t_min, total_time, n + 1)
+    mean_l = lit._t_bucket_l_sqerr / lit._t_bucket_l_count.clamp_min(1.0)
+    mean_f = lit._t_bucket_f_sqerr / lit._t_bucket_f_count.clamp_min(1.0)
+    rows = [
+        {
+            "bin": i,
+            "t_lo": edges[i].item(),
+            "t_hi": edges[i + 1].item(),
+            "err_l": mean_l[i].item(),
+            "err_f": mean_f[i].item(),
+            "n_l": int(lit._t_bucket_l_count[i].item()),
+            "n_f": int(lit._t_bucket_f_count[i].item()),
+        }
+        for i in range(n)
+    ]
+    return {"edges": edges.tolist(), "rows": rows}
+
+
+def print_t_buckets(bucket_summary: dict) -> None:
+    print("\n============= per-t prediction error =============")
+    print("  bin  [t_lo,  t_hi)     err_l (n)             err_f (n)")
+    for r in bucket_summary["rows"]:
+        print(
+            f"  {r['bin']:02d}: [{r['t_lo']:5.3f},{r['t_hi']:5.3f})  "
+            f"l={r['err_l']:.4e} (n={r['n_l']:6d})  f={r['err_f']:.4e} (n={r['n_f']:6d})"
+        )
+    print("=================================================")
+
+
 def find_latest_checkpoint(pattern: str = DEFAULT_CKPT_GLOB) -> str:
     """Pick the most recent checkpoint (preferring ``last.ckpt``)."""
     ckpts = sorted(glob.glob(pattern))
@@ -143,6 +182,7 @@ def evaluate(
     ckpt_path: str,
     split: str = "val",
     batch_size: int = 64,
+    portion: float = 1.0,
     n_steps: int | None = None,
     pc: bool | None = False,
     pc_steps: int | None = 1,
@@ -150,6 +190,9 @@ def evaluate(
     best_n: int | None = 1,
     device_str: str = DEFAULT_DEVICE,
     seed: int | None = 0,
+    compute_buckets: bool = True,
+    t_bins: int = 10,
+    t_bucket_repeats: int = 4,
 ) -> dict:
     device = torch.device(device_str)
 
@@ -157,12 +200,19 @@ def evaluate(
 
     transform_lengths, transform_angles, transform_pos = transform.transforms[0], transform.transforms[1], transform.transforms[2]
     ds_path = os.path.join(data_folder, f"{split}.pt")
-    dataset = CrystalDataset(path=ds_path, transform=transform)
+    dataset = CrystalDataset(path=ds_path, transform=transform, portion=portion)
     loader = PyGDataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     lit = load_lit_model(ckpt_path, device)
     sample_kwargs = resolve_sample_kwargs(lit, n_steps=n_steps, pc=pc, pc_steps=pc_steps)
     print(f"Sampling kwargs: {sample_kwargs}")
+
+    if compute_buckets:
+        # reuse the LightningModule's bucket machinery, but with eval-chosen
+        # granularity, and reset the accumulators for this run.
+        lit.n_t_bins = t_bins
+        lit.t_bucket_repeats = t_bucket_repeats
+        lit._reset_t_buckets()
 
     metrics = CSPMetrics(**MATCHER_KWARGS)
 
@@ -196,6 +246,11 @@ def evaluate(
         gen_structures = np.array(gen_structures, dtype=object)
 
         metrics.update(gen_structures, target_structures)
+
+        # raw, un-weighted per-t-bucket prediction error on the same batch
+        if compute_buckets:
+            lit._update_t_buckets_from_batch(batch)
+
         summary = metrics.summarize()
         pbar.set_postfix(
             valid=f"{summary['valid']:.3f}",
@@ -203,7 +258,12 @@ def evaluate(
             rmse=f"{summary['rmse']:.4f}",
         )
 
-    return metrics.summarize()
+    summary = metrics.summarize()
+    if compute_buckets:
+        bucket_summary = summarize_t_buckets(lit)
+        print_t_buckets(bucket_summary)
+        summary["t_buckets"] = bucket_summary
+    return summary
 
 
 def main():
@@ -231,6 +291,12 @@ def main():
         help="Enable/disable predictor-corrector (default: checkpoint setting).",
     )
     parser.add_argument(
+        "--portion",
+        type=float,
+        default=1.0,
+        help="Portion of the dataset to evaluate (default: 1.0).",
+    )
+    parser.add_argument(
         "--pc-steps",
         type=int,
         default=1,
@@ -251,6 +317,24 @@ def main():
     parser.add_argument("--device", type=str, default=DEFAULT_DEVICE)
     
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--buckets",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compute/print the raw per-t-bucket prediction error (default: on).",
+    )
+    parser.add_argument(
+        "--t-bins",
+        type=int,
+        default=10,
+        help="Number of noise-level (t) buckets for the error breakdown.",
+    )
+    parser.add_argument(
+        "--t-bucket-repeats",
+        type=int,
+        default=4,
+        help="Re-noise each batch this many times to fill the t buckets.",
+    )
     args = parser.parse_args()
 
     ckpt_path = args.ckpt or find_latest_checkpoint()
@@ -263,6 +347,7 @@ def main():
         ckpt_path=ckpt_path,
         split=args.split,
         batch_size=args.batch_size,
+        portion=args.portion,
         n_steps=args.n_steps,
         pc=args.pc,
         best_n=args.best_n,
@@ -270,6 +355,9 @@ def main():
         max_batches=args.max_batches,
         device_str=args.device,
         seed=args.seed,
+        compute_buckets=args.buckets,
+        t_bins=args.t_bins,
+        t_bucket_repeats=args.t_bucket_repeats,
     )
 
     print("\n================ CSP evaluation ================")
