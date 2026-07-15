@@ -3,7 +3,7 @@ from torch import nn
 from typing import Optional, Literal
 from abc import ABC, abstractmethod
 
-from src.data import wrap_angle
+from src.dataLib.synthetic import wrap_angle
 import math
 
 class BaseDistribution(ABC,nn.Module):
@@ -40,10 +40,10 @@ class WrappedNormalDistribution():
             C2_component = (x - self.mu + k * T) / (self.sigma**2)
             C_2 += C_component * C2_component
             C += C_component
-        
-        return C_2 / C
-            
 
+        # guard against 0/0 when every truncation term underflows (very small sigma)
+        return C_2 / (C + 1e-9)
+            
 
 
 def sigma_norm(sigma: torch.Tensor, T: float = 2 * torch.pi, N: int = 10, sn: int = 20000):

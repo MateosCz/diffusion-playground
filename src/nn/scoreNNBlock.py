@@ -32,6 +32,61 @@ class SinusoidalTimeEmbedding(nn.Module):
         emb = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (B, half_dim * 2)
         return emb
 
+class SinEmbedding(nn.Module):
+    """
+    Sinusoidal embedding of a (relative) coordinate vector. Maps a tensor of
+    shape (..., n_space) to (..., n_space * n_frequencies * 2) sin/cos features.
+
+    Used to embed fractional-coordinate differences (and, via a projection,
+    velocity differences) on the edges of a crystal graph.
+
+    The coordinates are expected to live on the LieTorus in ``[-pi, pi)``
+    (period ``2*pi``), matching the ``TDMDiffusion`` convention. Integer
+    frequencies ``k = 0, 1, ..., n-1`` therefore give ``sin(k * dx)`` features
+    that are periodic with period ``2*pi``, i.e. respect the toroidal boundary.
+    (The original DiffCSP design used ``2*pi * k`` for coordinates in ``[0, 1)``;
+    dropping the ``2*pi`` factor rescales that convention to the ``2*pi`` torus.)
+    """
+    def __init__(self, n_frequencies: int = 10, n_space: int = 3):
+        super().__init__()
+        self.n_frequencies = n_frequencies
+        self.n_space = n_space
+        self.dim = n_space * n_frequencies * 2
+        freqs = torch.arange(n_frequencies, dtype=torch.float32)
+        self.register_buffer("frequencies", freqs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (..., n_space)
+        emb = x.unsqueeze(-1) * self.frequencies          # (..., n_space, n_frequencies)
+        emb = emb.reshape(*x.shape[:-1], self.n_space * self.n_frequencies)
+        emb = torch.cat([emb.sin(), emb.cos()], dim=-1)    # (..., dim)
+        return emb
+
+
+class FourierEmbedding(nn.Module):
+    """
+    Random Fourier-feature embedding (e.g. for diffusion time). Maps an input
+    of shape (B, in_features) to (B, out_features) via
+    [sin(2*pi * x @ W), cos(2*pi * x @ W)] with fixed Gaussian weights W.
+    """
+    def __init__(self, in_features: int = 1, out_features: int = 128, scale: float = 1.0):
+        super().__init__()
+        if out_features % 2 != 0:
+            raise ValueError(f"out_features must be even, got {out_features}")
+        self.in_features = in_features
+        self.out_features = out_features
+        half_dim = out_features // 2
+        self.register_buffer("weight", torch.randn(in_features, half_dim) * scale)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Accept (B,) or (B, in_features)
+        if x.ndim == 1:
+            x = x.unsqueeze(-1)
+        x = x.to(dtype=self.weight.dtype, device=self.weight.device)
+        proj = 2.0 * math.pi * (x @ self.weight)           # (B, half_dim)
+        return torch.cat([proj.sin(), proj.cos()], dim=-1)  # (B, out_features)
+
+
 def sinusoidal_positional_embedding(token_sequence_size, half_dim, n=10000.0):
 
 

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 import lightning as L
 from torch_geometric.data import Data
-from src.diffusion import TDMDiffusion  
+from src.diffusion.tdm import TDMDiffusion  
 from src.trainGraph import weighted_score_loss
 
 class LitVanillaGNN(L.LightningModule):

@@ -1,0 +1,371 @@
+"""
+Evaluate the *crystal-structure-prediction* (CSP) quality of a trained
+``LitCSPVNet`` / ``KLDM`` checkpoint.
+
+For every crystal in the evaluation split we keep its atom types ``h`` (and atom
+count) fixed as conditioning, then sample a lattice + fractional coordinates via
+the reverse (denoising) ``KLDM`` process. Each generated structure is compared
+against its ground-truth counterpart with :class:`src.metrics.csp.CSPMetrics`,
+which reports:
+
+  - ``valid``      : fraction of generated structures that are physically valid
+  - ``match_rate`` : fraction that match the ground truth (StructureMatcher)
+  - ``rmse``       : mean normalized RMS displacement over matched structures
+
+The network / diffusion / transform are imported directly from
+``src.litTrain.trainLitKLDM`` so the evaluation configuration can never drift
+from the training configuration.
+"""
+
+import argparse
+import glob
+import os
+import numpy as np
+import torch
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader as PyGDataLoader
+from tqdm.auto import tqdm
+
+from src.dataLib.realCrystal import CrystalDataset
+from src.dataLib.data_util import PyGData_to_Structure, kldm_output_to_structures_batch
+from src.metrics.csp import CSPMetrics
+from src.litTrain.trainLitKLDM import (
+    build_transform,
+    build_model,
+    build_kldm,
+)
+from src.lit.litCSPVNet import LitCSPVNet
+
+from pymatgen.analysis.structure_matcher import StructureMatcher
+
+dataset_name = "mp-20"
+data_folder = "data/mp-20"
+# --------------------------------------------------------------------------- #
+# Config (CLI-overridable defaults)
+# --------------------------------------------------------------------------- #
+DEFAULT_CKPT_GLOB = f"checkpoints/*/CSPVNet_KLDM_{dataset_name}_*/*.ckpt"
+
+# Reverse-diffusion sampling on CPU is robust and avoids missing MPS/CUDA TDM
+# kernels; override with --device if you have full GPU kernel coverage.
+DEFAULT_DEVICE = "cuda"
+
+# StructureMatcher tolerances used for the CSP match rate (DiffCSP/CDVAE style).
+MATCHER_KWARGS = dict(stol=0.5, angle_tol=10.0, ltol=0.3)
+
+# Same tolerances as the reported metric, so best-of-N selection is consistent
+# with how the winner will later be scored.
+_SELECTION_MATCHER = StructureMatcher(**MATCHER_KWARGS)
+
+
+def _candidate_rms(gen, target) -> float | None:
+    """Normalized RMS displacement, or None if invalid / no match."""
+    if gen is None:
+        return None
+    try:
+        res = _SELECTION_MATCHER.get_rms_dist(gen, target)
+    except Exception:
+        return None
+    return None if res is None else float(res[0])
+
+
+def select_best_candidates(candidates, targets):
+    """Pick, per crystal, the candidate with the lowest RMS against the target.
+
+    ``candidates`` is a list of length ``best_n``; each element is a list of
+    ``B`` generated structures (one per crystal in the batch). Crystals with no
+    matching candidate fall back to the first sample, so they still contribute
+    to ``valid`` / ``match_rate`` as a miss rather than being dropped.
+    """
+    best = []
+    for j, target in enumerate(targets):
+        best_k, best_rms = 0, None
+        for k, cand in enumerate(candidates):
+            rms = _candidate_rms(cand[j], target)
+            if rms is None:
+                continue
+            if best_rms is None or rms < best_rms:
+                best_rms, best_k = rms, k
+        best.append(candidates[best_k][j])
+    return best
+
+def resolve_sample_kwargs(
+    lit: LitCSPVNet,
+    n_steps: int | None = None,
+    pc: bool | None = None,
+    pc_steps: int | None = None,
+) -> dict:
+    """Merge checkpoint ``sample_kwargs`` with optional CLI overrides.
+
+    Training validation uses ``lit.sample()`` with the checkpoint kwargs. Eval
+    must do the same; turning on predictor-corrector without a tuned step size
+    makes the lattice state diverge (log-lengths >> 1 -> invalid / inf cells).
+    """
+    kwargs = dict(lit.sample_kwargs)
+    if n_steps is not None:
+        kwargs["n_steps"] = n_steps
+    if pc is not None:
+        kwargs["predictor_corrector"] = pc
+        kwargs["predictor_corrector_n_steps"] = pc_steps if pc else 0
+    elif pc_steps is not None:
+        kwargs["predictor_corrector_n_steps"] = pc_steps
+    return kwargs
+
+
+def summarize_t_buckets(lit: LitCSPVNet) -> dict:
+    """Read the per-t-bucket error accumulators off a ``LitCSPVNet``.
+
+    Returns a plain dict (bin edges + per-bin mean error and counts) so the
+    breakdown can be printed and/or persisted without a Lightning trainer.
+    Lattice error is x0-MSE (parameterization="x0"); coord error is score-MSE.
+    """
+    t_min = lit.diffusion_kwargs.get("t_min", 5e-3)
+    total_time = lit.kldm.total_time
+    n = lit.n_t_bins
+    edges = torch.linspace(t_min, total_time, n + 1)
+    mean_l = lit._t_bucket_l_sqerr / lit._t_bucket_l_count.clamp_min(1.0)
+    mean_f = lit._t_bucket_f_sqerr / lit._t_bucket_f_count.clamp_min(1.0)
+    rows = [
+        {
+            "bin": i,
+            "t_lo": edges[i].item(),
+            "t_hi": edges[i + 1].item(),
+            "err_l": mean_l[i].item(),
+            "err_f": mean_f[i].item(),
+            "n_l": int(lit._t_bucket_l_count[i].item()),
+            "n_f": int(lit._t_bucket_f_count[i].item()),
+        }
+        for i in range(n)
+    ]
+    return {"edges": edges.tolist(), "rows": rows}
+
+
+def print_t_buckets(bucket_summary: dict) -> None:
+    print("\n============= per-t prediction error =============")
+    print("  bin  [t_lo,  t_hi)     err_l (n)             err_f (n)")
+    for r in bucket_summary["rows"]:
+        print(
+            f"  {r['bin']:02d}: [{r['t_lo']:5.3f},{r['t_hi']:5.3f})  "
+            f"l={r['err_l']:.4e} (n={r['n_l']:6d})  f={r['err_f']:.4e} (n={r['n_f']:6d})"
+        )
+    print("=================================================")
+
+
+def find_latest_checkpoint(pattern: str = DEFAULT_CKPT_GLOB) -> str:
+    """Pick the most recent checkpoint (preferring ``last.ckpt``)."""
+    ckpts = sorted(glob.glob(pattern))
+    if not ckpts:
+        raise FileNotFoundError(f"No checkpoints matched '{pattern}'.")
+    last = [c for c in ckpts if c.endswith("last.ckpt")]
+    return (last or ckpts)[-1]
+
+
+def load_lit_model(ckpt_path: str, device: torch.device) -> LitCSPVNet:
+    """Rebuild the exact training architecture and restore trained weights."""
+    model = build_model()
+    kldm = build_kldm().to(device)
+    lit = LitCSPVNet.load_from_checkpoint(
+        ckpt_path,
+        model=model,
+        kldm=kldm,
+        map_location=device,
+        weights_only=False
+    )
+    lit.eval()
+    lit.to(device)
+    return lit
+
+
+@torch.inference_mode()
+def evaluate(
+    dataset_name: str,
+    data_folder: str,
+    ckpt_path: str,
+    split: str = "val",
+    batch_size: int = 64,
+    portion: float = 1.0,
+    n_steps: int | None = None,
+    pc: bool | None = False,
+    pc_steps: int | None = 1,
+    max_batches: int | None = None,
+    best_n: int | None = 1,
+    device_str: str = DEFAULT_DEVICE,
+    seed: int | None = 0,
+    compute_buckets: bool = True,
+    t_bins: int = 10,
+    t_bucket_repeats: int = 4,
+) -> dict:
+    device = torch.device(device_str)
+
+    transform = build_transform()
+
+    transform_lengths, transform_angles, transform_pos = transform.transforms[0], transform.transforms[1], transform.transforms[2]
+    ds_path = os.path.join(data_folder, f"{split}.pt")
+    dataset = CrystalDataset(path=ds_path, transform=transform, portion=portion)
+    loader = PyGDataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    lit = load_lit_model(ckpt_path, device)
+    sample_kwargs = resolve_sample_kwargs(lit, n_steps=n_steps, pc=pc, pc_steps=pc_steps)
+    print(f"Sampling kwargs: {sample_kwargs}")
+
+    if compute_buckets:
+        # reuse the LightningModule's bucket machinery, but with eval-chosen
+        # granularity, and reset the accumulators for this run.
+        lit.n_t_bins = t_bins
+        lit.t_bucket_repeats = t_bucket_repeats
+        lit._reset_t_buckets()
+
+    metrics = CSPMetrics(**MATCHER_KWARGS)
+
+    n_batches = len(loader) if max_batches is None else min(max_batches, len(loader))
+    pbar = tqdm(loader, total=n_batches, desc=f"CSP eval [{split}]")
+    for i, batch in enumerate(pbar):
+        if max_batches is not None and i >= max_batches:
+            break
+
+        batch = batch.to(device)
+
+        # Ground truth is read from the (unmodified) conditioning batch; the atom
+        # types / counts are what we condition the generation on.
+        target_structures = [PyGData_to_Structure(batch[j], transform_lengths, transform_angles, transform_pos) for j in range(batch.num_graphs)]
+
+        gen_struct_candidates = []
+        for i in range(best_n):
+            candidate_seed = None if seed is None else seed + i
+            l0, f0 = lit.kldm.sample_backward(
+                graphT=batch,
+                score_fn=lit.forward_from_data,
+                seed=candidate_seed,
+                **sample_kwargs,
+            )
+
+            gen_struct_candidates.append(kldm_output_to_structures_batch(batch, l0, f0, transform_lengths, transform_angles, transform_pos))
+        if best_n > 1:
+            gen_structures = select_best_candidates(gen_struct_candidates, target_structures)
+        else:
+            gen_structures = gen_struct_candidates[0]
+        gen_structures = np.array(gen_structures, dtype=object)
+
+        metrics.update(gen_structures, target_structures)
+
+        # raw, un-weighted per-t-bucket prediction error on the same batch
+        if compute_buckets:
+            lit._update_t_buckets_from_batch(batch)
+
+        summary = metrics.summarize()
+        pbar.set_postfix(
+            valid=f"{summary['valid']:.3f}",
+            match=f"{summary['match_rate']:.3f}",
+            rmse=f"{summary['rmse']:.4f}",
+        )
+
+    summary = metrics.summarize()
+    if compute_buckets:
+        bucket_summary = summarize_t_buckets(lit)
+        print_t_buckets(bucket_summary)
+        summary["t_buckets"] = bucket_summary
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="Path to a .ckpt file. Defaults to the latest CSPVNet_KLDM checkpoint.",
+    )
+    parser.add_argument("--dataset-name", type=str, default=dataset_name)
+    parser.add_argument("--data-folder", type=str, default=data_folder)
+    parser.add_argument("--split", type=str, default="val", choices=["train", "val", "test"])
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--n-steps",
+        type=int,
+        default=None,
+        help="Reverse-diffusion steps (default: value stored in the checkpoint).",
+    )
+    parser.add_argument(
+        "--pc",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable/disable predictor-corrector (default: checkpoint setting).",
+    )
+    parser.add_argument(
+        "--portion",
+        type=float,
+        default=1.0,
+        help="Portion of the dataset to evaluate (default: 1.0).",
+    )
+    parser.add_argument(
+        "--pc-steps",
+        type=int,
+        default=1,
+        help="Predictor-corrector steps when --pc is enabled.",
+    )
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=None,
+        help="Cap the number of evaluated batches (quick smoke test).",
+    )
+    parser.add_argument(
+        "--best-n",
+        type=int,
+        default=1,
+        help="Sample N structures per crystal and keep the best-matching one.",
+    )
+    parser.add_argument("--device", type=str, default=DEFAULT_DEVICE)
+    
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--buckets",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compute/print the raw per-t-bucket prediction error (default: on).",
+    )
+    parser.add_argument(
+        "--t-bins",
+        type=int,
+        default=10,
+        help="Number of noise-level (t) buckets for the error breakdown.",
+    )
+    parser.add_argument(
+        "--t-bucket-repeats",
+        type=int,
+        default=4,
+        help="Re-noise each batch this many times to fill the t buckets.",
+    )
+    args = parser.parse_args()
+
+    ckpt_path = args.ckpt or find_latest_checkpoint()
+    print(f"Evaluating checkpoint: {ckpt_path}")
+    print(f"Dataset: {args.data_folder} | Split: {args.split} | device: {args.device}")
+
+    summary = evaluate(
+        dataset_name=args.dataset_name,
+        data_folder=args.data_folder,
+        ckpt_path=ckpt_path,
+        split=args.split,
+        batch_size=args.batch_size,
+        portion=args.portion,
+        n_steps=args.n_steps,
+        pc=args.pc,
+        best_n=args.best_n,
+        pc_steps=args.pc_steps,
+        max_batches=args.max_batches,
+        device_str=args.device,
+        seed=args.seed,
+        compute_buckets=args.buckets,
+        t_bins=args.t_bins,
+        t_bucket_repeats=args.t_bucket_repeats,
+    )
+
+    print("\n================ CSP evaluation ================")
+    print(f"  validity   : {summary['valid']:.4f}")
+    print(f"  match rate : {summary['match_rate']:.4f}")
+    print(f"  rmse       : {summary['rmse']:.4f}")
+    print("===============================================")
+
+
+if __name__ == "__main__":
+    main()
