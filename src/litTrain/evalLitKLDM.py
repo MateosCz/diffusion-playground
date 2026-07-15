@@ -20,7 +20,7 @@ from the training configuration.
 import argparse
 import glob
 import os
-
+import numpy as np
 import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader as PyGDataLoader
@@ -36,6 +36,8 @@ from src.litTrain.trainLitKLDM import (
 )
 from src.lit.litCSPVNet import LitCSPVNet
 
+from pymatgen.analysis.structure_matcher import StructureMatcher
+
 dataset_name = "mp-20"
 data_folder = "data/mp-20"
 # --------------------------------------------------------------------------- #
@@ -50,6 +52,41 @@ DEFAULT_DEVICE = "cuda"
 # StructureMatcher tolerances used for the CSP match rate (DiffCSP/CDVAE style).
 MATCHER_KWARGS = dict(stol=0.5, angle_tol=10.0, ltol=0.3)
 
+# Same tolerances as the reported metric, so best-of-N selection is consistent
+# with how the winner will later be scored.
+_SELECTION_MATCHER = StructureMatcher(**MATCHER_KWARGS)
+
+
+def _candidate_rms(gen, target) -> float | None:
+    """Normalized RMS displacement, or None if invalid / no match."""
+    if gen is None:
+        return None
+    try:
+        res = _SELECTION_MATCHER.get_rms_dist(gen, target)
+    except Exception:
+        return None
+    return None if res is None else float(res[0])
+
+
+def select_best_candidates(candidates, targets):
+    """Pick, per crystal, the candidate with the lowest RMS against the target.
+
+    ``candidates`` is a list of length ``best_n``; each element is a list of
+    ``B`` generated structures (one per crystal in the batch). Crystals with no
+    matching candidate fall back to the first sample, so they still contribute
+    to ``valid`` / ``match_rate`` as a miss rather than being dropped.
+    """
+    best = []
+    for j, target in enumerate(targets):
+        best_k, best_rms = 0, None
+        for k, cand in enumerate(candidates):
+            rms = _candidate_rms(cand[j], target)
+            if rms is None:
+                continue
+            if best_rms is None or rms < best_rms:
+                best_rms, best_k = rms, k
+        best.append(candidates[best_k][j])
+    return best
 
 def resolve_sample_kwargs(
     lit: LitCSPVNet,
@@ -110,6 +147,7 @@ def evaluate(
     pc: bool | None = False,
     pc_steps: int | None = 1,
     max_batches: int | None = None,
+    best_n: int | None = 1,
     device_str: str = DEFAULT_DEVICE,
     seed: int | None = 0,
 ) -> dict:
@@ -139,14 +177,23 @@ def evaluate(
         # Ground truth is read from the (unmodified) conditioning batch; the atom
         # types / counts are what we condition the generation on.
         target_structures = [PyGData_to_Structure(batch[j], transform_lengths, transform_angles, transform_pos) for j in range(batch.num_graphs)]
-        l0, f0 = lit.kldm.sample_backward(
-            graphT=batch,
-            score_fn=lit.forward_from_data,
-            seed=seed,
-            **sample_kwargs,
-        )
 
-        gen_structures = kldm_output_to_structures_batch(batch, l0, f0, transform_lengths, transform_angles, transform_pos)
+        gen_struct_candidates = []
+        for i in range(best_n):
+            candidate_seed = None if seed is None else seed + i
+            l0, f0 = lit.kldm.sample_backward(
+                graphT=batch,
+                score_fn=lit.forward_from_data,
+                seed=candidate_seed,
+                **sample_kwargs,
+            )
+
+            gen_struct_candidates.append(kldm_output_to_structures_batch(batch, l0, f0, transform_lengths, transform_angles, transform_pos))
+        if best_n > 1:
+            gen_structures = select_best_candidates(gen_struct_candidates, target_structures)
+        else:
+            gen_structures = gen_struct_candidates[0]
+        gen_structures = np.array(gen_structures, dtype=object)
 
         metrics.update(gen_structures, target_structures)
         summary = metrics.summarize()
@@ -195,7 +242,14 @@ def main():
         default=None,
         help="Cap the number of evaluated batches (quick smoke test).",
     )
+    parser.add_argument(
+        "--best-n",
+        type=int,
+        default=1,
+        help="Sample N structures per crystal and keep the best-matching one.",
+    )
     parser.add_argument("--device", type=str, default=DEFAULT_DEVICE)
+    
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -211,6 +265,7 @@ def main():
         batch_size=args.batch_size,
         n_steps=args.n_steps,
         pc=args.pc,
+        best_n=args.best_n,
         pc_steps=args.pc_steps,
         max_batches=args.max_batches,
         device_str=args.device,
