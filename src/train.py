@@ -4,8 +4,8 @@ from torch.utils.data import DataLoader
 
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
-from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
-from src.scoreNN import TDM_SimpleScoreMLP
+from src.dataLib.synthetic import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
+from src.nn.scoreNN import TDM_SimpleScoreMLP
 from src.diffusion.tdm import TDMDiffusion
 from src.device import get_default_device
 

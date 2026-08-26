@@ -95,21 +95,36 @@ checkerboard data generation
 
 class Checkerboard_Dataset(Dataset):
     """
-    Square checkerboard dataset, num of tiles should be (num_row * num_row)
-    get the num of tiles, num of sampled points, num of total samples
-    return the sampled points fractional coordinates [0,1).
+    Periodic checkerboard dataset in ``dim`` dimensions.
+
+    The unit cube is divided into ``num_rows`` tiles along each dimension, and
+    samples are drawn uniformly from tiles whose index sum is even. Returned
+    points are fractional coordinates in [0, 1).
 
     parameters:
         - num_rows: the counts of rows of tiles.
         - dataset_size: Virtual length of the dataset (for DataLoader compatibility). 
         Since we generate on the fly, the value is somewhat arbitrary. 
         E.g. DataLoader iterates dataset_size / batch_size steps per epoch. So 10_000 with batch_size=32 gives ~312 steps per epoch.
+        - dim: Dimension of each sample. ``dim=1`` gives alternating intervals
+          on a periodic line, while the default ``dim=2`` gives the original
+          square checkerboard.
 
     """
-    def __init__(self, num_rows, dataset_size = 10000, seed: int| None = None):
+    def __init__(
+        self,
+        num_rows,
+        dataset_size=10000,
+        seed: int | None = None,
+        dim: int = 2,
+    ):
+        if not isinstance(dim, int) or isinstance(dim, bool) or dim < 1:
+            raise ValueError(f"dim must be a positive integer, got {dim!r}")
+
         self.num_rows = num_rows
         self.dataset_size = dataset_size
         self.seed = seed
+        self.dim = dim
 
     
     def __len__(self):
@@ -119,47 +134,46 @@ class Checkerboard_Dataset(Dataset):
         if self.seed is not None:
             generator = torch.Generator().manual_seed(self.seed + idx)
             return self._generate_checkerboard_sample(
-                self.num_rows, 
+                self.num_rows,
+                self.dim,
                 generator)
         else:
             return self._generate_checkerboard_sample(
                 self.num_rows,
+                self.dim,
             )
 
 
     def _generate_checkerboard_sample(
         self,
         num_rows: int,
+        dim: int,
         generator: torch.Generator = None
     ):
         """
-        Generate one sample of `num_points` on the black tiles of an num_rows x num_rows checkerboard.
+        Generate one sample from the even-parity tiles of a checkerboard.
 
         Args:
-            - num_rows: Number of tile rows (and columns). Must be >= 1.
-            - num_points: Number of accepted points per sample.
-            - oversample_factor: How many candidates to propose per expected accept.
-            Acceptance rate is ~0.5, so 2.5 gives a comfortable margin.
+            - num_rows: Number of tiles along each dimension. Must be >= 1.
+            - dim: Number of dimensions in each sample.
             - generator: RNG state used for torch.rand(). Passing a per-index generator
             (seeded with self.seed + idx) ensures each sample is reproducible
             while remaining independent across indices.
         
         Returns:
-            Tensor of shape (n_points, 2) with coordinates in [0, 1).
+            Tensor of shape (dim,) with coordinates in [0, 1).
         """
 
         while True:
-            # propose candidates uniformly in [0,1)**2
+            # Propose candidates uniformly in [0, 1)**dim.
             if generator is None:
-                point = torch.rand(2) # (2,)
+                point = torch.rand(dim)
             else:
-                point = torch.rand(2, generator=generator)
+                point = torch.rand(dim, generator=generator)
 
-            # Tile indices for each candidate
-            tile_x = (point[0] * num_rows).long()
-            tile_y = (point[1] * num_rows).long()
-            if ((tile_x + tile_y) % 2) == 0:
-                return point  # (2,)
+            tile_indices = (point * num_rows).long()
+            if (tile_indices.sum() % 2) == 0:
+                return point
 
 
 class Pacman_Dataset(Dataset):
@@ -478,10 +492,10 @@ Lie torus dataset wrapper
 
 class TorusLieWrapper(Dataset):
     """
-    Wraps any dataset that returns (num_points, 2) tensors in [0, 1)
-    and converts them to SO(2) x SO(2) rotation matrices.
+    Wraps any dataset that returns (dim,) tensors in [0, 1) and converts each
+    periodic coordinate to an SO(2) rotation matrix.
     
-    Output shape: (2, 2, 2) — 2x2 rotation matrices.    
+    Output shape: (dim, 2, 2).
     """
 
     def __init__(self, base_dataset):
@@ -492,12 +506,12 @@ class TorusLieWrapper(Dataset):
 
     def __getitem__(self, idx):
         result = self.base[idx]
-        points = result[0] if isinstance(result, tuple) else result  # (num_points, 2) in [0, 1)
-        angles = (points - 0.5) * 2 * torch.pi          # (num_points, 2) in [-pi, pi)
+        points = result[0] if isinstance(result, tuple) else result  # (dim,) in [0, 1)
+        angles = (points - 0.5) * 2 * torch.pi          # (dim,) in [-pi, pi)
         c, s = torch.cos(angles), torch.sin(angles)
-        row0 = torch.stack([c, s], dim=-1)               # (num_points, 2, 2 (row1))
+        row0 = torch.stack([c, s], dim=-1)               # (dim, 2)
         row1 = torch.stack([-s, c], dim=-1)
-        matrices = torch.stack([row0, row1], dim=-2)     # (num_points, 2(theta1,theta2, corresponding to x,y), 2(row1), 2(row2))
+        matrices = torch.stack([row0, row1], dim=-2)     # (dim, 2, 2)
         return matrices
 
 
