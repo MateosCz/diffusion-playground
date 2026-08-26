@@ -39,6 +39,16 @@ class FlatTorus(BaseManifold):
         self.center = center
 
     @property
+    def intrinsic_dim(self) -> int:
+        """Number of periodic coordinates."""
+        return self.dim
+
+    @property
+    def ambient_dim(self) -> int:
+        """Embedding dimension using one cosine/sine pair per coordinate."""
+        return 2 * self.dim
+
+    @property
     def lower(self) -> float:
         """Lower endpoint of the canonical fundamental domain."""
         return self.center - self.period / 2
@@ -55,6 +65,45 @@ class FlatTorus(BaseManifold):
         """
         return self.wrap(samples)
 
+    def to_ambient(self, points: torch.Tensor) -> torch.Tensor:
+        """Embed ``T^dim`` into ``R^(2*dim)`` using cosine/sine pairs."""
+        if points.shape[-1] != self.dim:
+            raise ValueError(
+                f"intrinsic points must have last dimension {self.dim}, "
+                f"got {points.shape[-1]}"
+            )
+        phase = 2 * math.pi * (self.wrap(points) - self.lower) / self.period
+        pairs = torch.stack((torch.cos(phase), torch.sin(phase)), dim=-1)
+        return pairs.flatten(start_dim=-2)
+
+    def from_ambient(self, points: torch.Tensor) -> torch.Tensor:
+        """Recover canonical periodic coordinates from ambient pairs."""
+        if points.shape[-1] != self.ambient_dim:
+            raise ValueError(
+                f"ambient points must have last dimension {self.ambient_dim}, "
+                f"got {points.shape[-1]}"
+            )
+        pairs = points.reshape(*points.shape[:-1], self.dim, 2)
+        phase = torch.atan2(pairs[..., 1], pairs[..., 0])
+        phase = torch.remainder(phase, 2 * math.pi)
+        intrinsic = self.lower + self.period * phase / (2 * math.pi)
+        return self.wrap(intrinsic)
+
+    def project_ambient(self, points: torch.Tensor) -> torch.Tensor:
+        """Normalize every cosine/sine pair to the unit circle."""
+        if points.shape[-1] != self.ambient_dim:
+            raise ValueError(
+                f"ambient points must have last dimension {self.ambient_dim}, "
+                f"got {points.shape[-1]}"
+            )
+        pairs = points.reshape(*points.shape[:-1], self.dim, 2)
+        norms = torch.linalg.vector_norm(pairs, dim=-1, keepdim=True)
+        normalized = pairs / norms.clamp_min(self.eps)
+        canonical = torch.zeros_like(normalized)
+        canonical[..., 0] = 1
+        normalized = torch.where(norms > self.eps, normalized, canonical)
+        return normalized.flatten(start_dim=-2)
+
     def project_to_tangent(
         self,
         x: torch.Tensor,
@@ -62,6 +111,16 @@ class FlatTorus(BaseManifold):
     ) -> torch.Tensor:
         """Project ``v`` onto ``T_x M`` (the identity for a flat torus)."""
         return v
+
+    def parallel_transport(
+        self,
+        source: torch.Tensor,
+        target: torch.Tensor,
+        tangent: torch.Tensor,
+    ) -> torch.Tensor:
+        """Parallel transport is the identity under the flat metric."""
+        del source, target
+        return tangent
 
     def log_map(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
         """Return a shortest signed displacement from ``x0`` to ``x1``."""
@@ -108,7 +167,12 @@ class FlatTorus(BaseManifold):
         self._broadcast_time(t, x1 - x0)
         return self.log_map(x0, x1)
 
-    def sample(self, batch_size: int, device="cpu") -> torch.Tensor:
+    def sample(
+        self,
+        batch_size: int,
+        device="cpu",
+        dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
         """Sample ``batch_size`` points uniformly from the torus."""
         if not isinstance(batch_size, int) or isinstance(batch_size, bool):
             raise TypeError(
@@ -117,7 +181,7 @@ class FlatTorus(BaseManifold):
         if batch_size < 0:
             raise ValueError(f"batch_size must be non-negative, got {batch_size}")
 
-        samples = torch.rand(batch_size, self.dim, device=device)
+        samples = torch.rand(batch_size, self.dim, device=device, dtype=dtype)
         return samples * self.period + self.lower
 
     def distance(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -141,7 +205,7 @@ class FlatTorus01(FlatTorus):
         super().__init__(dim=dim, period=1.0, center=0.5, eps=eps)
 
 
-# A descriptive alias used by some callers and by ``src.diffusion.rfm``.
+# Descriptive compatibility alias.
 FlatTorusManifold = FlatTorus
 
 

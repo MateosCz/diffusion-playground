@@ -1,19 +1,11 @@
 from .base import BaseDiffusion
-from .rfm import (
-    BaseManifold,
-    EuclideanManifold,
-    FlatTorusManifold,
-    RFM,
-    RiemannianFlowMatching,
-)
+from .continuous import ContinuousDiffusion
+from .kldm import KLDM
 from .tdm import TDMDiffusion
 
 __all__ = [
     "BaseDiffusion",
-    "BaseManifold",
-    "EuclideanManifold",
-    "FlatTorusManifold",
-    "RFM",
-    "RiemannianFlowMatching",
+    "ContinuousDiffusion",
+    "KLDM",
     "TDMDiffusion",
 ]
