@@ -50,23 +50,23 @@ def test_extrinsic_prior_uses_manifold_ambient_dimension():
     assert flow_2d.model_dim == 4
 
 
-def test_extrinsic_training_uses_linear_ambient_path_and_endpoint_target():
+def test_extrinsic_training_uses_linear_ambient_path_and_x_T_target():
     manifold = FlatTorus01(dim=1)
     flow = RGVFM(manifold, support="extrinsic")
     x_data = torch.tensor([[0.0], [0.25]])
-    x_base = torch.zeros(2, 2)
+    x_0 = torch.zeros(2, 2)
     times = torch.full((2, 1), 0.5)
-    endpoint = manifold.to_ambient(x_data)
+    x_T = manifold.to_ambient(x_data)
 
     returned_t, x_t, target = flow.sample_training_pair(
         x_data,
-        x_base,
+        x_0,
         t=times,
     )
 
     torch.testing.assert_close(returned_t, times)
-    torch.testing.assert_close(x_t, 0.5 * endpoint, atol=1e-6, rtol=0)
-    torch.testing.assert_close(target, endpoint, atol=1e-6, rtol=0)
+    torch.testing.assert_close(x_t, 0.5 * x_T, atol=1e-6, rtol=0)
+    torch.testing.assert_close(target, x_T, atol=1e-6, rtol=0)
 
 
 def test_extrinsic_loss_is_torus_geodesic_distance_not_ambient_mse():
@@ -105,14 +105,14 @@ def test_extrinsic_sampling_stays_in_ambient_space_and_decodes_to_torus():
         support="extrinsic",
         max_velocity_scale=None,
     )
-    x_base = torch.tensor([[0.0, 0.0], [0.5, -0.5]])
-    endpoint = manifold.to_ambient(torch.tensor([[0.25], [0.75]]))
+    x_0 = torch.tensor([[0.0, 0.0], [0.5, -0.5]])
+    x_T = manifold.to_ambient(torch.tensor([[0.25], [0.75]]))
 
-    samples = flow.sample(lambda t, x: endpoint, x_base, n_steps=4)
+    samples = flow.sample(lambda t, x: x_T, x_0, n_steps=4)
     decoded = flow.to_intrinsic(samples)
 
     assert samples.shape == (2, 2)
-    torch.testing.assert_close(samples, endpoint, atol=1e-6, rtol=0)
+    torch.testing.assert_close(samples, x_T, atol=1e-6, rtol=0)
     torch.testing.assert_close(
         decoded,
         torch.tensor([[0.25], [0.75]]),

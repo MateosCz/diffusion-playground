@@ -39,7 +39,7 @@ class RiemannianFlowMatching(BaseFlowMatching):
     def sample_training_pair(
         self,
         x_data: torch.Tensor,
-        x_base: Optional[torch.Tensor] = None,
+        x_0: Optional[torch.Tensor] = None,
         *,
         t: Optional[torch.Tensor] = None,
         time_distribution: TimeDistribution = "uniform",
@@ -47,7 +47,7 @@ class RiemannianFlowMatching(BaseFlowMatching):
         constant_time: float = 0.5,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return ``(t, x_t, conditional_velocity)`` for RFM training."""
-        x_base = self._prepare_base(x_data, x_base)
+        x_0 = self._prepare_base(x_data, x_0)
         times = self.sample_time(
             x_data,
             distribution=time_distribution,
@@ -55,7 +55,7 @@ class RiemannianFlowMatching(BaseFlowMatching):
             constant_time=constant_time,
             t=t,
         )
-        x_t = self._conditional_state(x_base, x_data, times)
+        x_t = self._conditional_state(x_0, x_data, times)
         target = self.conditional_vector_field(times, x_t, x_data)
         return times, x_t, target
 

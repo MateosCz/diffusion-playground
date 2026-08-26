@@ -12,7 +12,7 @@ def make_flow(**kwargs):
     )
 
 
-def test_forward_sample_returns_endpoint_target_and_time():
+def test_forward_sample_returns_x_T_target_and_time():
     flow = make_flow()
     x0 = torch.tensor([[0.9], [0.2]])
     x1 = torch.tensor([[0.1], [0.8]])
@@ -70,34 +70,34 @@ def test_loss_uses_geodesic_distance_across_periodic_boundary():
     torch.testing.assert_close(flow.loss(pred, target), torch.tensor(0.01))
 
 
-def test_backward_step_converts_endpoint_to_velocity():
+def test_backward_step_converts_x_T_to_velocity():
     flow = make_flow()
     x_t = torch.tensor([[0.9]])
-    endpoint = torch.tensor([[0.1]])
+    x_T = torch.tensor([[0.1]])
 
-    x_next = flow.sample_backward_step(x_t, t=0.0, pred=endpoint, dt=0.25)
+    x_next = flow.sample_backward_step(x_t, t=0.0, pred=x_T, dt=0.25)
 
     torch.testing.assert_close(x_next, torch.tensor([[0.95]]), atol=1e-6, rtol=0)
 
 
-def test_backward_sampling_reaches_constant_predicted_endpoint_and_tracks_path():
+def test_backward_sampling_reaches_constant_predicted_x_T_and_tracks_path():
     flow = make_flow()
     x0 = torch.tensor([[0.9], [0.2]])
-    endpoint = torch.tensor([[0.1], [0.8]])
+    x_T = torch.tensor([[0.1], [0.8]])
 
-    def endpoint_model(x_t, t):
+    def x_T_model(x_t, t):
         assert t.shape == (x_t.shape[0], 1)
-        return endpoint
+        return x_T
 
     trajectory, times = flow.sample_backward(
         x0,
-        endpoint_model,
+        x_T_model,
         n_steps=4,
         sample_trajectory=True,
         return_time=True,
     )
 
-    torch.testing.assert_close(trajectory[-1], endpoint, atol=1e-6, rtol=0)
+    torch.testing.assert_close(trajectory[-1], x_T, atol=1e-6, rtol=0)
     assert trajectory.shape == (5, 2, 1)
     torch.testing.assert_close(times, torch.linspace(0, 1, 5))
 
@@ -105,24 +105,24 @@ def test_backward_sampling_reaches_constant_predicted_endpoint_and_tracks_path()
 def test_canonical_sample_uses_time_first_model():
     flow = make_flow()
     x0 = torch.tensor([[0.9], [0.2]])
-    endpoint = torch.tensor([[0.1], [0.8]])
+    x_T = torch.tensor([[0.1], [0.8]])
 
-    def endpoint_model(t, x_t):
+    def x_T_model(t, x_t):
         assert t.shape == (x_t.shape[0], 1)
-        return endpoint
+        return x_T
 
     times, trajectory = flow.sample(
-        endpoint_model,
+        x_T_model,
         x0,
         n_steps=4,
         return_trajectory=True,
     )
 
-    torch.testing.assert_close(trajectory[-1], endpoint, atol=1e-6, rtol=0)
+    torch.testing.assert_close(trajectory[-1], x_T, atol=1e-6, rtol=0)
     torch.testing.assert_close(times, torch.linspace(0, 1, 5))
 
 
-def test_stabilized_endpoint_field_supports_higher_order_integrators():
+def test_stabilized_x_T_field_supports_higher_order_integrators():
     x0 = torch.tensor([[0.2]])
 
     for method in ("heun", "rk4"):

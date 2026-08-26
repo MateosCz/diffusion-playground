@@ -49,7 +49,7 @@ class BaseFlowMatching(ABC, nn.Module):
     def sample_training_pair(
         self,
         x_data: torch.Tensor,
-        x_base: Optional[torch.Tensor] = None,
+        x_0: Optional[torch.Tensor] = None,
         *,
         t: Optional[torch.Tensor] = None,
         time_distribution: TimeDistribution = "uniform",
@@ -83,7 +83,7 @@ class BaseFlowMatching(ABC, nn.Module):
 
     def sample_path(
         self,
-        x_base: torch.Tensor,
+        x_0: torch.Tensor,
         x_data: torch.Tensor,
         *,
         t: Optional[torch.Tensor | float] = None,
@@ -94,14 +94,14 @@ class BaseFlowMatching(ABC, nn.Module):
         A supplied ``t`` returns one state per batch item.  With ``t=None``,
         the return value is ``(times, states)`` and includes both endpoints.
         """
-        self._validate_pair(x_base, x_data)
+        self._validate_pair(x_0, x_data)
         if t is not None:
-            return self._conditional_state(x_base, x_data, t)
+            return self._conditional_state(x_0, x_data, t)
         if n_steps < 1:
             raise ValueError(f"n_steps must be at least 1, got {n_steps}")
         times = self.time_grid(x_data, n_steps)
         states = torch.stack(
-            [self._conditional_state(x_base, x_data, time) for time in times],
+            [self._conditional_state(x_0, x_data, time) for time in times],
             dim=0,
         )
         return times, states
@@ -110,25 +110,25 @@ class BaseFlowMatching(ABC, nn.Module):
     def sample(
         self,
         model: FlowModel,
-        x_base: torch.Tensor,
+        x_0: torch.Tensor,
         *,
         n_steps: int = 100,
         integrator: Optional[str | BaseODEIntegrator] = None,
         return_trajectory: bool = False,
     ):
         """Generate data by solving the learned ODE from base to data time."""
-        self._validate_points(x_base, "x_base")
+        self._validate_points(x_0, "x_0")
         if n_steps < 1:
             raise ValueError(f"n_steps must be at least 1, got {n_steps}")
         solver = self.integrator if integrator is None else get_integrator(integrator)
-        times = self.time_grid(x_base, n_steps)
+        times = self.time_grid(x_0, n_steps)
 
         def field(t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
             return self.vector_field(model, t, x)
 
         return solver.integrate(
             field,
-            x_base,
+            x_0,
             times,
             state_update=self.state_update,
             transport=self.tangent_transport,
@@ -256,25 +256,25 @@ class BaseFlowMatching(ABC, nn.Module):
 
     def _conditional_state(
         self,
-        x_base: torch.Tensor,
+        x_0: torch.Tensor,
         x_data: torch.Tensor,
         t: torch.Tensor | float,
     ) -> torch.Tensor:
         time = torch.as_tensor(t, device=x_data.device, dtype=x_data.dtype)
         if time.ndim == 1 and time.shape[0] == x_data.shape[0]:
             time = time.unsqueeze(-1)
-        return self.manifold.geodesic(x_base, x_data, time / self.total_time)
+        return self.manifold.geodesic(x_0, x_data, time / self.total_time)
 
     def _prepare_base(
         self,
         x_data: torch.Tensor,
-        x_base: Optional[torch.Tensor],
+        x_0: Optional[torch.Tensor],
     ) -> torch.Tensor:
         self._validate_points(x_data, "x_data")
-        if x_base is None:
+        if x_0 is None:
             return self.sample_prior(x_data)
-        self._validate_pair(x_base, x_data)
-        return x_base.to(device=x_data.device, dtype=x_data.dtype)
+        self._validate_pair(x_0, x_data)
+        return x_0.to(device=x_data.device, dtype=x_data.dtype)
 
     @staticmethod
     def _validate_points(x: torch.Tensor, name: str) -> None:
@@ -288,13 +288,13 @@ class BaseFlowMatching(ABC, nn.Module):
             raise TypeError(f"{name} must use a floating-point dtype")
 
     @classmethod
-    def _validate_pair(cls, x_base: torch.Tensor, x_data: torch.Tensor) -> None:
-        cls._validate_points(x_base, "x_base")
+    def _validate_pair(cls, x_0: torch.Tensor, x_data: torch.Tensor) -> None:
+        cls._validate_points(x_0, "x_0")
         cls._validate_points(x_data, "x_data")
-        if x_base.shape != x_data.shape:
+        if x_0.shape != x_data.shape:
             raise ValueError(
-                "x_base and x_data must have the same shape, "
-                f"got {x_base.shape} and {x_data.shape}"
+                "x_0 and x_data must have the same shape, "
+                f"got {x_0.shape} and {x_data.shape}"
             )
 
 

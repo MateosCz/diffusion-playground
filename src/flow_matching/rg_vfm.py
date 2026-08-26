@@ -1,10 +1,10 @@
 """Riemannian Gaussian Variational Flow Matching (RG-VFM).
 
-RG-VFM predicts the endpoint of a conditional probability path.  At sampling
-time the endpoint prediction is converted into a vector field.  Intrinsic
-support uses a logarithmic map,
+RG-VFM predicts the terminal state ``x_T`` of a conditional probability path.
+At sampling time the ``x_T`` prediction is converted into a vector field.
+Intrinsic support uses a logarithmic map,
 
-``v_t(x) = Log_x(mu_t(x)) / (total_time - t)``.
+``v_t(x_t) = Log_{x_t}(pred_x_T) / (total_time - t)``.
 
 Extrinsic support uses the analogous Euclidean displacement in the manifold's
 declared ambient space.
@@ -21,7 +21,7 @@ from src.ode.integrators import BaseODEIntegrator, EulerIntegrator
 
 
 class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
-    """RG-VFM with intrinsic or ambient-space endpoint regression.
+    """RG-VFM with intrinsic or ambient-space terminal-state regression.
 
     ``support="intrinsic"`` uses geodesics, tangent vector fields and manifold
     priors.  ``support="extrinsic"`` embeds data into the manifold's ambient
@@ -69,7 +69,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
 
     @property
     def model_dim(self) -> int:
-        """Feature dimension seen by the endpoint model."""
+        """Feature dimension seen by the ``x_T``-predicting model."""
         if self.support == "extrinsic":
             return self.manifold.ambient_dim
         return self.manifold.intrinsic_dim
@@ -77,24 +77,24 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
     def sample_training_pair(
         self,
         x_data: torch.Tensor,
-        x_base: Optional[torch.Tensor] = None,
+        x_0: Optional[torch.Tensor] = None,
         *,
         t: Optional[torch.Tensor] = None,
         time_distribution: TimeDistribution = "uniform",
         t_min: float = 0.0,
         constant_time: float = 0.5,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return ``(t, x_t, endpoint)`` in the configured representation."""
-        x_base, endpoint = self._prepare_training_endpoints(x_data, x_base)
+        """Return ``(t, x_t, x_T)`` in the configured representation."""
+        x_0, x_T = self._prepare_training_pair(x_data, x_0)
         times = self.sample_time(
-            endpoint,
+            x_T,
             distribution=time_distribution,
             t_min=t_min,
             constant_time=constant_time,
             t=t,
         )
-        x_t = self._conditional_state(x_base, endpoint, times)
-        return times, self._perturb(x_t), endpoint
+        x_t = self._conditional_state(x_0, x_T, times)
+        return times, self._perturb(x_t), x_T
 
     def loss(
         self,
@@ -104,7 +104,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         x_t: Optional[torch.Tensor] = None,
         t: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Mean squared geodesic distance to the target endpoint."""
+        """Mean squared geodesic distance to the target ``x_T``."""
         del x_t, t
         if prediction.shape != target.shape:
             raise ValueError(
@@ -120,18 +120,18 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
             result = result / self.manifold.intrinsic_dim
         return result
 
-    def endpoint_to_vector_field(
+    def x_T_to_vector_field(
         self,
         t: torch.Tensor | float,
         x_t: torch.Tensor,
-        endpoint: torch.Tensor,
+        x_T: torch.Tensor,
     ) -> torch.Tensor:
-        """Convert an endpoint prediction into a tangent velocity."""
+        """Convert a predicted terminal state ``x_T`` into a tangent velocity."""
         self._validate_model_state(x_t, "x_t")
-        if endpoint.shape != x_t.shape:
+        if x_T.shape != x_t.shape:
             raise ValueError(
-                "endpoint and x_t must have the same shape, "
-                f"got {endpoint.shape} and {x_t.shape}"
+                "x_T and x_t must have the same shape, "
+                f"got {x_T.shape} and {x_t.shape}"
             )
         times = self.batch_time(t, x_t)
         remaining = self.total_time - self.expand_time(times, x_t)
@@ -146,8 +146,8 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         if self.max_velocity_scale is not None:
             scale = scale.clamp(max=self.max_velocity_scale)
         if self.support == "extrinsic":
-            return (endpoint - x_t) * scale
-        tangent = self.manifold.log_map(x_t, endpoint) * scale
+            return (x_T - x_t) * scale
+        tangent = self.manifold.log_map(x_t, x_T) * scale
         return self.manifold.project_to_tangent(x_t, tangent)
 
     def vector_field(
@@ -156,14 +156,14 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         t: torch.Tensor | float,
         x_t: torch.Tensor,
     ) -> torch.Tensor:
-        """Evaluate endpoint model ``model(t, x)`` and construct its velocity."""
+        """Evaluate an ``x_T`` model and construct its velocity at ``x_t``."""
         times = self.batch_time(t, x_t)
-        endpoint = model(times, x_t)
-        if endpoint.shape != x_t.shape:
+        pred_x_T = model(times, x_t)
+        if pred_x_T.shape != x_t.shape:
             raise ValueError(
-                f"model must return shape {x_t.shape}, got {endpoint.shape}"
+                f"model must return shape {x_t.shape}, got {pred_x_T.shape}"
             )
-        return self.endpoint_to_vector_field(times, x_t, endpoint)
+        return self.x_T_to_vector_field(times, x_t, pred_x_T)
 
     def step(
         self,
@@ -172,7 +172,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         x_t: torch.Tensor,
         dt: torch.Tensor | float,
     ) -> torch.Tensor:
-        """Advance one Euler step using an endpoint-predicting model."""
+        """Advance one Euler step using an ``x_T``-predicting model."""
         scalar_t = torch.as_tensor(t, device=x_t.device, dtype=x_t.dtype)
         scalar_dt = torch.as_tensor(dt, device=x_t.device, dtype=x_t.dtype)
         return EulerIntegrator().step(
@@ -206,22 +206,22 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
 
     def sample_path(
         self,
-        x_base: torch.Tensor,
+        x_0: torch.Tensor,
         x_data: torch.Tensor,
         *,
         t: Optional[torch.Tensor | float] = None,
         n_steps: int = 100,
     ):
         """Evaluate a conditional path in intrinsic or ambient coordinates."""
-        endpoint = self.to_model_space(x_data)
-        self._validate_pair(x_base, endpoint)
+        x_T = self.to_model_space(x_data)
+        self._validate_pair(x_0, x_T)
         if t is not None:
-            return self._conditional_state(x_base, endpoint, t)
+            return self._conditional_state(x_0, x_T, t)
         if n_steps < 1:
             raise ValueError(f"n_steps must be at least 1, got {n_steps}")
-        times = self.time_grid(endpoint, n_steps)
+        times = self.time_grid(x_T, n_steps)
         states = torch.stack(
-            [self._conditional_state(x_base, endpoint, time) for time in times],
+            [self._conditional_state(x_0, x_T, time) for time in times],
             dim=0,
         )
         return times, states
@@ -317,32 +317,32 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
                 f"got {state.shape[-1]}"
             )
 
-    def _prepare_training_endpoints(
+    def _prepare_training_pair(
         self,
         x_data: torch.Tensor,
-        x_base: Optional[torch.Tensor],
+        x_0: Optional[torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        endpoint = self.to_model_space(x_data)
-        if x_base is None:
-            x_base = self.sample_prior(endpoint)
+        x_T = self.to_model_space(x_data)
+        if x_0 is None:
+            x_0 = self.sample_prior(x_T)
         else:
-            self._validate_points(x_base, "x_base")
-            x_base = x_base.to(device=endpoint.device, dtype=endpoint.dtype)
-        self._validate_pair(x_base, endpoint)
-        return x_base, endpoint
+            self._validate_points(x_0, "x_0")
+            x_0 = x_0.to(device=x_T.device, dtype=x_T.dtype)
+        self._validate_pair(x_0, x_T)
+        return x_0, x_T
 
     def _conditional_state(
         self,
-        x_base: torch.Tensor,
-        endpoint: torch.Tensor,
+        x_0: torch.Tensor,
+        x_T: torch.Tensor,
         t: torch.Tensor | float,
     ) -> torch.Tensor:
         if self.support == "intrinsic":
-            return super()._conditional_state(x_base, endpoint, t)
-        time = torch.as_tensor(t, device=endpoint.device, dtype=endpoint.dtype)
-        while time.ndim < endpoint.ndim:
+            return super()._conditional_state(x_0, x_T, t)
+        time = torch.as_tensor(t, device=x_T.device, dtype=x_T.dtype)
+        while time.ndim < x_T.ndim:
             time = time.unsqueeze(-1)
-        return x_base + (time / self.total_time) * (endpoint - x_base)
+        return x_0 + (time / self.total_time) * (x_T - x_0)
 
     def _perturb(self, x_t: torch.Tensor) -> torch.Tensor:
         if self.noise_scale == 0:
@@ -352,7 +352,16 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         noise = self.manifold.project_to_tangent(x_t, torch.randn_like(x_t))
         return self.manifold.exp_map(x_t, self.noise_scale * noise)
 
-    # Common terminology in endpoint-parameterized VFM implementations.
+    # Backward-compatible names from the endpoint-parameterized API. Keep the
+    # old keyword name as well as the old method names.
+    def endpoint_to_vector_field(
+        self,
+        t: torch.Tensor | float,
+        x_t: torch.Tensor,
+        endpoint: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.x_T_to_vector_field(t, x_t, endpoint)
+
     endpoint_to_velocity = endpoint_to_vector_field
 
     # ------------------------------------------------------------------
@@ -374,10 +383,10 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         if sample_trajectory:
             if ts is not None:
                 raise ValueError("ts cannot be combined with sample_trajectory=True")
-            x0, endpoint = self._prepare_training_endpoints(x1, x0)
-            times, states = self.sample_path(x0, endpoint, n_steps=n_steps)
+            x0, x_T = self._prepare_training_pair(x1, x0)
+            times, states = self.sample_path(x0, x_T, n_steps=n_steps)
             states = self._perturb(states)
-            targets = endpoint.unsqueeze(0).expand_as(states)
+            targets = x_T.unsqueeze(0).expand_as(states)
             if return_time:
                 return states, targets, times
             return states, targets
@@ -409,7 +418,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         pred: torch.Tensor,
         dt: torch.Tensor | float,
     ) -> torch.Tensor:
-        velocity = self.endpoint_to_vector_field(t, x_t, pred)
+        velocity = self.x_T_to_vector_field(t, x_t, pred)
         step_size = torch.as_tensor(dt, device=x_t.device, dtype=x_t.dtype)
         return self.state_update(x_t, step_size * velocity)
 
