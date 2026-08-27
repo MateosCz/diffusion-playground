@@ -83,6 +83,11 @@ class BaseManifold(ABC):
         """Compute geodesic distance between ``x`` and ``y``."""
         raise NotImplementedError
 
+    @abstractmethod
+    def project_to_manifold(self, x: torch.Tensor) -> torch.Tensor:
+        """Project the point outside the manifold to the manifold."""
+        raise NotImplementedError
+
     def inner(
         self,
         x: torch.Tensor,

@@ -43,7 +43,7 @@ flow_kwargs = {
 rg_vfm_kwargs = {
     "total_time": total_time,
     "time_eps": 1e-5,
-    "noise_scale": 0.0,
+    "noise_scale": 0.025,
     "max_velocity_scale": 20.0,
     "normalize_loss": False,
     "support": "intrinsic",
@@ -108,6 +108,7 @@ def build_model(manifold: FlatTorus01 | None = None) -> RGVFMMLP:
     return RGVFMMLP(
         **nn_kwargs,
         position_period=manifold.period,
+        manifold=manifold,
     )
 
 

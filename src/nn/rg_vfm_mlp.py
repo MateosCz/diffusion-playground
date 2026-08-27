@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 import src.nn.scoreNNBlock as Block
+from src.manifolds.base import BaseManifold
 
 
 class RGVFMMLP(nn.Module):
@@ -32,6 +33,7 @@ class RGVFMMLP(nn.Module):
         time_embedding_scale: float = 1.0,
         position_fourier_bands: int = 1,
         position_period: float | Sequence[float] | torch.Tensor = 2 * torch.pi,
+        manifold: BaseManifold = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -78,7 +80,7 @@ class RGVFMMLP(nn.Module):
         self.total_time = float(total_time)
         self.time_embedding_scale = float(time_embedding_scale)
         self.position_fourier_bands = position_fourier_bands
-
+        self.manifold = manifold
         position_period_tensor = torch.as_tensor(
             position_period,
             dtype=torch.float32,
@@ -171,7 +173,10 @@ class RGVFMMLP(nn.Module):
         for hidden_layer in self.endpoint_net:
             hidden = hidden_layer(torch.cat([hidden, h_t], dim=-1))
             hidden = self.activation(hidden)
-        return self.output_layer(hidden)
+        # wrap the output back to the period
+        hidden = self.output_layer(hidden)
+        hidden = self.manifold.project_to_manifold(hidden)
+        return hidden
 
 
 __all__ = ["RGVFMMLP"]

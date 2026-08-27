@@ -131,6 +131,12 @@ class FlatTorus(BaseManifold):
         """Move from ``x0`` along tangent vector ``v`` and wrap the result."""
         return self.wrap(x0 + v)
 
+    def project_to_manifold(self, x: torch.Tensor) -> torch.Tensor:
+        """Project the point outside the manifold to the manifold.
+        
+        """
+        return self.wrap(x)
+
     @staticmethod
     def _broadcast_time(t, reference: torch.Tensor) -> torch.Tensor:
         """Turn scalar or batch-shaped time values into broadcastable values."""

@@ -1,0 +1,30 @@
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python /home/jizho/projects/diffusion-playground/src/litTra ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/jizho/.netrc.
+wandb: Currently logged in as: zjccharles to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run lisymj8a
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in wandb_logs/wandb/run-20260827_185110-lisymj8a
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run RGVFMMLP_checkerboard_fractional
+wandb: ⭐️ View project at https://wandb.ai/zjccharles/diffusion-playground
+wandb: 🚀 View run at https://wandb.ai/zjccharles/diffusion-playground/runs/lisymj8a
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [3]
+
+  | Name   | Type                                      | Params | Mode  | FLOPs
+-------------------------------------------------------------------------------------
+0 | model  | RGVFMMLP                                  | 1.9 M  | train | 0    
+1 | rg_vfm | RiemannianGaussianVariationalFlowMatching | 0      | train | 0    
+-------------------------------------------------------------------------------------
+1.9 M     Trainable params
+0         Non-trainable params
+1.9 M     Total params
+7.655     Total estimated model params size (MB)
+17        Modules in train mode
+0         Modules in eval mode
+0         Total Flops
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+slurmstepd: error: *** JOB 544049 ON comp-gpu03 CANCELLED AT 2026-08-27T19:02:36 ***
