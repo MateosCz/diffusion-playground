@@ -112,9 +112,9 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
                 f"got {prediction.shape} and {target.shape}"
             )
         if self.support == "extrinsic":
-            distance = self.manifold.ambient_distance(prediction, target)
+            distance = self.manifold.ambient_distance(prediction, target) # geodesic distance after projecting the ambient space to the manifold
         else:
-            distance = self.manifold.distance(prediction, target)
+            distance = self.manifold.distance(prediction, target) # geodesic distance in the manifold
         result = distance.square().mean()
         if self.normalize_loss:
             result = result / self.manifold.intrinsic_dim

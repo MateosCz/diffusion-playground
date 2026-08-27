@@ -31,6 +31,7 @@ class RGVFMMLP(nn.Module):
         total_time: float = 1.0,
         time_embedding_scale: float = 1.0,
         position_fourier_bands: int = 1,
+        position_period: float | Sequence[float] | torch.Tensor = 2 * torch.pi,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -78,6 +79,26 @@ class RGVFMMLP(nn.Module):
         self.time_embedding_scale = float(time_embedding_scale)
         self.position_fourier_bands = position_fourier_bands
 
+        position_period_tensor = torch.as_tensor(
+            position_period,
+            dtype=torch.float32,
+        )
+        if position_period_tensor.ndim == 0:
+            position_period_tensor = position_period_tensor.repeat(dim)
+        if position_period_tensor.shape != (dim,):
+            raise ValueError(
+                "position_period must be a scalar or have shape "
+                f"({dim},), got {tuple(position_period_tensor.shape)}"
+            )
+        if not torch.isfinite(position_period_tensor).all():
+            raise ValueError("position_period must contain only finite values")
+        if torch.any(position_period_tensor <= 0):
+            raise ValueError("position_period must contain only positive values")
+        self.register_buffer(
+            "position_period",
+            position_period_tensor.clone(),
+        )
+
         position_embedding_dim = dim * 2 * position_fourier_bands
         self.register_buffer(
             "position_frequencies",
@@ -124,7 +145,11 @@ class RGVFMMLP(nn.Module):
             )
 
         frequencies = self.position_frequencies.to(dtype=x_t.dtype)
-        x_frequencies = x_t.unsqueeze(-1) * frequencies
+        period = self.position_period.to(dtype=x_t.dtype)
+        normalized_x = x_t / period
+        x_frequencies = (
+            2 * torch.pi * normalized_x.unsqueeze(-1) * frequencies
+        )
         x_embedding = torch.cat(
             [
                 torch.sin(x_frequencies).flatten(start_dim=-2),

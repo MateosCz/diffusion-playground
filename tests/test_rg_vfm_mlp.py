@@ -35,17 +35,41 @@ def test_forward_accepts_flat_batch_time():
     assert prediction.shape == (8, 2)
 
 
-def test_position_encoding_is_periodic():
-    model = make_model(position_fourier_bands=3).eval()
+@pytest.mark.parametrize("period", [1.0, 2 * torch.pi])
+def test_position_encoding_is_periodic(period):
+    model = make_model(
+        position_fourier_bands=3,
+        position_period=period,
+    ).eval()
     t = torch.rand(8, 1)
     x_t = torch.rand(8, 2)
 
     torch.testing.assert_close(
         model(t, x_t),
-        model(t, x_t + 2 * torch.pi),
+        model(t, x_t + period),
         atol=1e-5,
         rtol=1e-5,
     )
+
+
+def test_position_encoding_supports_a_period_per_dimension():
+    period = torch.tensor([1.0, 2 * torch.pi])
+    model = make_model(position_period=period).eval()
+    t = torch.rand(8, 1)
+    x_t = torch.rand(8, 2)
+
+    torch.testing.assert_close(
+        model(t, x_t),
+        model(t, x_t + period),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+@pytest.mark.parametrize("period", [0.0, -1.0, [1.0], [1.0, float("inf")]])
+def test_position_period_must_match_dimension_and_be_positive(period):
+    with pytest.raises(ValueError):
+        make_model(position_period=period)
 
 
 @pytest.mark.parametrize(
