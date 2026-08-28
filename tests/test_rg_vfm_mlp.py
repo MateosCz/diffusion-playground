@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from src.manifolds import FlatTorus01
 from src.nn.rg_vfm_mlp import RGVFMMLP
 
 
@@ -11,6 +12,7 @@ def make_model(**kwargs) -> RGVFMMLP:
         time_embedding_half_dim=4,
         hidden_dim=[32, 32, 16],
         output_dim=2,
+        manifold=FlatTorus01(dim=2),
         **kwargs,
     )
 
@@ -64,6 +66,36 @@ def test_position_encoding_supports_a_period_per_dimension():
         atol=1e-5,
         rtol=1e-5,
     )
+
+
+def test_position_encoding_can_use_raw_coordinates():
+    model = make_model(with_sincos_position=False).eval()
+    captured_input = None
+
+    def capture_lifting_input(module, args):
+        del module
+        nonlocal captured_input
+        captured_input = args[0]
+
+    handle = model.lifting_layer_x.register_forward_pre_hook(
+        capture_lifting_input
+    )
+    x_t = torch.rand(8, 2)
+    try:
+        prediction = model(torch.rand(8, 1), x_t)
+    finally:
+        handle.remove()
+
+    assert model.lifting_layer_x[0].in_features == 2
+    assert prediction.shape == x_t.shape
+    torch.testing.assert_close(captured_input, x_t)
+
+
+def test_sincos_position_remains_the_default():
+    model = make_model(position_fourier_bands=3)
+
+    assert model.with_sincos_position is True
+    assert model.lifting_layer_x[0].in_features == 2 * 2 * 3
 
 
 @pytest.mark.parametrize("period", [0.0, -1.0, [1.0], [1.0, float("inf")]])

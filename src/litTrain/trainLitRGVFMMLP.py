@@ -26,7 +26,7 @@ from src.nn.rg_vfm_mlp import RGVFMMLP
 total_time = 1.0
 dim = 2
 n_epoch = 2_000
-lr = 8e-4
+lr = 1e-4
 batch_size = 512
 num_workers = 0
 
@@ -43,7 +43,7 @@ flow_kwargs = {
 rg_vfm_kwargs = {
     "total_time": total_time,
     "time_eps": 1e-5,
-    "noise_scale": 0.025,
+    "noise_scale": 0.001,
     "max_velocity_scale": 20.0,
     "normalize_loss": False,
     "support": "intrinsic",
@@ -55,11 +55,12 @@ nn_kwargs = {
     "dim": dim,
     "x_lifting_dim": 256,
     "time_embedding_half_dim": 128,
-    "hidden_dim": [512, 1024, 512],
+    "hidden_dim": [512, 1024, 1024,512],
     "output_dim": dim,
     "total_time": total_time,
     "time_embedding_scale": 1.0,
     "position_fourier_bands": 8,
+    "with_sincos_position": False,
 }
 
 

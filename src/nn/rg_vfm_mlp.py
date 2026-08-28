@@ -15,9 +15,8 @@ class RGVFMMLP(nn.Module):
     The network mirrors :class:`TDM_SimpleScoreMLP`: position and time
     features are lifted separately, time features are injected into every
     hidden layer, and SiLU activations are used throughout. Unlike the score
-    network, it does not take a velocity input. Positions are represented only
-    by their sine/cosine Fourier features so periodic coordinates remain
-    continuous across the boundary.
+    network, it does not take a velocity input. Positions can be represented
+    either by sine/cosine Fourier features or by their raw coordinates.
 
     In flow matching, the endpoint x_T is usually x_1, and the total time is 1.0.
     """
@@ -33,6 +32,7 @@ class RGVFMMLP(nn.Module):
         time_embedding_scale: float = 1.0,
         position_fourier_bands: int = 1,
         position_period: float | Sequence[float] | torch.Tensor = 2 * torch.pi,
+        with_sincos_position: bool = True,
         manifold: BaseManifold = None,
         **kwargs,
     ) -> None:
@@ -80,6 +80,7 @@ class RGVFMMLP(nn.Module):
         self.total_time = float(total_time)
         self.time_embedding_scale = float(time_embedding_scale)
         self.position_fourier_bands = position_fourier_bands
+        self.with_sincos_position = with_sincos_position
         self.manifold = manifold
         position_period_tensor = torch.as_tensor(
             position_period,
@@ -101,7 +102,11 @@ class RGVFMMLP(nn.Module):
             position_period_tensor.clone(),
         )
 
-        position_embedding_dim = dim * 2 * position_fourier_bands
+        position_embedding_dim = (
+            dim * 2 * position_fourier_bands
+            if with_sincos_position
+            else dim
+        )
         self.register_buffer(
             "position_frequencies",
             torch.arange(1, position_fourier_bands + 1, dtype=torch.float32),
@@ -146,19 +151,22 @@ class RGVFMMLP(nn.Module):
                 f"t must have shape ({x_t.shape[0]}, 1), got {tuple(t.shape)}"
             )
 
-        frequencies = self.position_frequencies.to(dtype=x_t.dtype)
-        period = self.position_period.to(dtype=x_t.dtype)
-        normalized_x = x_t / period
-        x_frequencies = (
-            2 * torch.pi * normalized_x.unsqueeze(-1) * frequencies
-        )
-        x_embedding = torch.cat(
-            [
-                torch.sin(x_frequencies).flatten(start_dim=-2),
-                torch.cos(x_frequencies).flatten(start_dim=-2),
-            ],
-            dim=-1,
-        )
+        if self.with_sincos_position:
+            frequencies = self.position_frequencies.to(dtype=x_t.dtype)
+            period = self.position_period.to(dtype=x_t.dtype)
+            normalized_x = x_t / period
+            x_frequencies = (
+                2 * torch.pi * normalized_x.unsqueeze(-1) * frequencies
+            )
+            x_embedding = torch.cat(
+                [
+                    torch.sin(x_frequencies).flatten(start_dim=-2),
+                    torch.cos(x_frequencies).flatten(start_dim=-2),
+                ],
+                dim=-1,
+            )
+        else:
+            x_embedding = x_t
 
         normalized_t = t / self.total_time
         t_embedding = Block.sinusoidal_time_embedding(
