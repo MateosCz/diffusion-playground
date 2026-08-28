@@ -47,6 +47,7 @@ rg_vfm_kwargs = {
     "max_velocity_scale": 20.0,
     "normalize_loss": False,
     "support": "intrinsic",
+    "intrinsic_prior_std": 1.0,
     "integrator": "euler",
 }
 

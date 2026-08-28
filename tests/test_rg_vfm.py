@@ -30,6 +30,30 @@ def test_forward_sample_returns_x_T_target_and_time():
     torch.testing.assert_close(returned_t, ts)
 
 
+def test_intrinsic_prior_is_wrapped_normal():
+    std = 0.125
+    flow = make_flow(intrinsic_prior_std=std)
+    like = torch.zeros(8, 1, dtype=torch.float64)
+
+    torch.manual_seed(123)
+    expected = flow.manifold.wrap(std * torch.randn_like(like))
+    torch.manual_seed(123)
+    prior = flow.sample_prior(like)
+
+    torch.testing.assert_close(prior, expected)
+    assert torch.all((0 <= prior) & (prior < 1))
+
+
+def test_intrinsic_prior_std_must_be_positive():
+    for std in (0.0, -1.0):
+        try:
+            make_flow(intrinsic_prior_std=std)
+        except ValueError as error:
+            assert "intrinsic_prior_std must be positive" in str(error)
+        else:
+            raise AssertionError("expected invalid intrinsic prior scale to fail")
+
+
 def test_flow_matching_training_api_is_time_first():
     flow = make_flow()
     x0 = torch.tensor([[0.9], [0.2]])

@@ -39,6 +39,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         max_velocity_scale: Optional[float] = 20.0,
         normalize_loss: bool = False,
         support: Literal["intrinsic", "extrinsic"] = "intrinsic",
+        intrinsic_prior_std: float = 1.0,
         ambient_prior_scale: float = 1.0,
         integrator: str | BaseODEIntegrator = "euler",
     ) -> None:
@@ -59,12 +60,15 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
             raise ValueError(
                 f"support must be 'intrinsic' or 'extrinsic', got {support!r}"
             )
+        if intrinsic_prior_std <= 0:
+            raise ValueError("intrinsic_prior_std must be positive")
         if ambient_prior_scale <= 0:
             raise ValueError("ambient_prior_scale must be positive")
         self.noise_scale = float(noise_scale)
         self.max_velocity_scale = max_velocity_scale
         self.normalize_loss = normalize_loss
         self.support = support
+        self.intrinsic_prior_std = float(intrinsic_prior_std)
         self.ambient_prior_scale = float(ambient_prior_scale)
 
     @property
@@ -233,13 +237,30 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> torch.Tensor:
-        """Sample on the manifold or from its ambient Euclidean space."""
+        """Sample a wrapped normal or an ambient Euclidean Gaussian prior."""
         if self.support == "intrinsic":
-            return super().sample_prior(
-                shape_or_like,
+            if isinstance(shape_or_like, torch.Tensor):
+                self._validate_points(shape_or_like, "shape_or_like")
+                shape = tuple(shape_or_like.shape)
+                device = shape_or_like.device
+                dtype = shape_or_like.dtype
+            else:
+                shape = tuple(shape_or_like)
+                device = device or torch.device("cpu")
+                dtype = dtype or torch.get_default_dtype()
+            if len(shape) != 2:
+                raise ValueError("shape must be (batch, features)")
+            if shape[1] != self.manifold.intrinsic_dim:
+                raise ValueError(
+                    "feature dimension must match intrinsic space, "
+                    f"got {shape[1]}"
+                )
+            gaussian = self.intrinsic_prior_std * torch.randn(
+                shape,
                 device=device,
                 dtype=dtype,
             )
+            return self.manifold.wrap(gaussian)
         if isinstance(shape_or_like, torch.Tensor):
             self._validate_points(shape_or_like, "shape_or_like")
             if shape_or_like.shape[-1] not in (
