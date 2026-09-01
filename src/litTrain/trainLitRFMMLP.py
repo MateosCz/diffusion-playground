@@ -1,4 +1,4 @@
-"""Train ``RGVFMMLP`` on 2D fractional-coordinate torus data."""
+"""Train a periodic velocity-predicting RFM MLP on 2D torus data."""
 
 from datetime import datetime
 
@@ -9,16 +9,13 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from torch.utils.data import DataLoader, Dataset
 
-from src.dataLib.synthetic import (
-    Checkerboard_Dataset,
-    Pacman_Dataset,
-)
+from src.dataLib.synthetic import Checkerboard_Dataset, Pacman_Dataset
 from src.device import get_default_device, get_lightning_accelerator
-from src.flow_matching import RGVFM
+from src.flow_matching import RFM
 from src.lit.checkerboard_generation_metrics import CheckerboardGenerationMetrics
-from src.lit.litRGVFMMLP import LitRGVFMMLP
+from src.lit.litRFMMLP import LitRFMMLP
 from src.manifolds import FlatTorus01
-from src.nn.rg_vfm_mlp import RGVFMMLP
+from src.nn.rfm_mlp import RFMMLP
 
 
 # ---------------------------------------------------------------------------
@@ -42,14 +39,10 @@ flow_kwargs = {
     "constant_time": 0.5,
 }
 
-rg_vfm_kwargs = {
+rfm_kwargs = {
     "total_time": total_time,
     "time_eps": 1e-5,
-    "noise_scale": 0.0,
-    "max_velocity_scale": 5.0,
     "normalize_loss": False,
-    "support": "intrinsic",
-    "intrinsic_prior_std": 1.0,
     "integrator": "euler",
 }
 
@@ -62,7 +55,6 @@ nn_kwargs = {
     "total_time": total_time,
     "time_embedding_scale": 1.0,
     "position_fourier_bands": 8,
-    # Raw coordinates create an artificial discontinuity at the 0/1 seam.
     "with_sincos_position": True,
 }
 
@@ -74,23 +66,21 @@ generation_eval_steps = 100
 def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
     """Create fractional-coordinate data directly in ``[0, 1)``."""
     if name == "checkerboard":
-        base_dataset = Checkerboard_Dataset(
+        return Checkerboard_Dataset(
             num_rows=4,
             dataset_size=size,
             seed=seed,
             dim=dim,
         )
-    elif name == "pacman":
-        base_dataset = Pacman_Dataset(
+    if name == "pacman":
+        return Pacman_Dataset(
             directory=pacman_path,
             size=size,
             seed=seed,
         )
-    else:
-        raise ValueError(
-            f"dataset_name must be 'checkerboard' or 'pacman', got {name!r}"
-        )
-    return base_dataset
+    raise ValueError(
+        f"dataset_name must be 'checkerboard' or 'pacman', got {name!r}"
+    )
 
 
 def build_loaders() -> tuple[DataLoader, DataLoader]:
@@ -102,28 +92,27 @@ def build_loaders() -> tuple[DataLoader, DataLoader]:
         "persistent_workers": num_workers > 0,
         "pin_memory": torch.cuda.is_available(),
     }
-    train_loader = DataLoader(train_dataset, shuffle=True, **common_kwargs)
-    val_loader = DataLoader(val_dataset, shuffle=False, **common_kwargs)
-    return train_loader, val_loader
+    return (
+        DataLoader(train_dataset, shuffle=True, **common_kwargs),
+        DataLoader(val_dataset, shuffle=False, **common_kwargs),
+    )
 
 
 def build_manifold(manifold_dim: int = dim) -> FlatTorus01:
-    """Build the canonical ``[0, 1)`` torus for fractional coordinates."""
     return FlatTorus01(dim=manifold_dim)
 
 
-def build_model(manifold: FlatTorus01 | None = None) -> RGVFMMLP:
+def build_model(manifold: FlatTorus01 | None = None) -> RFMMLP:
     manifold = manifold or build_manifold()
-    return RGVFMMLP(
+    return RFMMLP(
         **nn_kwargs,
         position_period=manifold.period,
         manifold=manifold,
     )
 
 
-def build_rg_vfm(manifold: FlatTorus01 | None = None) -> RGVFM:
-    manifold = manifold or build_manifold()
-    return RGVFM(manifold, **rg_vfm_kwargs)
+def build_rfm(manifold: FlatTorus01 | None = None) -> RFM:
+    return RFM(manifold or build_manifold(), **rfm_kwargs)
 
 
 def main() -> None:
@@ -133,15 +122,15 @@ def main() -> None:
     train_loader, val_loader = build_loaders()
     manifold = build_manifold()
 
-    lit_model = LitRGVFMMLP(
+    lit_model = LitRFMMLP(
         model=build_model(manifold),
-        rg_vfm=build_rg_vfm(manifold),
+        rfm=build_rfm(manifold),
         flow_kwargs=flow_kwargs,
         batch_size=batch_size,
         lr=lr,
     )
 
-    experiment_name = f"RGVFMMLP_{dataset_name}_fractional"
+    experiment_name = f"RFMMLP_{dataset_name}_fractional"
     checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     wandb_logger = WandbLogger(
         name=experiment_name,
@@ -151,7 +140,7 @@ def main() -> None:
     )
     loss_checkpoint = ModelCheckpoint(
         dirpath=checkpoint_dir,
-        filename="rgvfm_mlp_{epoch:04d}-{val_loss:.6f}",
+        filename="rfm_mlp_loss_{epoch:04d}-{val_loss:.6f}",
         monitor="val_loss",
         mode="min",
         save_top_k=1,
@@ -170,7 +159,7 @@ def main() -> None:
                 ModelCheckpoint(
                     dirpath=checkpoint_dir,
                     filename=(
-                        "rgvfm_mlp_distribution_"
+                        "rfm_mlp_distribution_"
                         "{epoch:04d}-{val_generated_tv:.6f}"
                     ),
                     monitor="val_generated_tv",
@@ -190,7 +179,6 @@ def main() -> None:
         gradient_clip_val=1.0,
         callbacks=callbacks,
     )
-
     try:
         trainer.fit(
             model=lit_model,

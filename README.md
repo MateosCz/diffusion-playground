@@ -42,6 +42,28 @@ RFM models predict velocity directly. RG-VFM models predict the terminal state
 ``x_T``, which the method converts to a velocity at the current state ``x_t``
 before ODE integration.
 
+For the 2D flat-torus checkerboard, the velocity-regression experiment can be
+started with:
+
+```bash
+python -m src.litTrain.trainLitRFMMLP
+```
+
+Both the RFM and RG-VFM training entry points periodically generate validation
+samples and save a distribution-selected checkpoint using checkerboard
+histogram TV. RG-VFM additionally logs its gain over the identity endpoint
+baseline; RFM logs its gain over the zero-velocity baseline. These diagnostics
+should be used alongside regression loss because either loss contains a large
+irreducible component that need not correlate with sample quality.
+
+Evaluate the best distribution-selected checkpoint without relying on a
+hard-coded notebook architecture:
+
+```bash
+python -m src.litTrain.evalFlatTorus2D --method rfm
+python -m src.litTrain.evalFlatTorus2D --method rgvfm
+```
+
 RG-VFM also supports an extrinsic ambient-space parameterization.  The
 manifold owns the embedding metadata and conversions; for example a
 ``FlatTorus01(dim=d)`` is embedded in ``R^(2d)`` with cosine/sine pairs:

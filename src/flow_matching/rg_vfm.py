@@ -36,7 +36,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         total_time: float = 1.0,
         time_eps: float = 1e-5,
         noise_scale: float = 0.0,
-        max_velocity_scale: Optional[float] = 20.0,
+        max_velocity_scale: Optional[float] = 5.0,
         normalize_loss: bool = False,
         support: Literal["intrinsic", "extrinsic"] = "intrinsic",
         intrinsic_prior_std: float = 1.0,
@@ -118,8 +118,8 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         if self.support == "extrinsic":
             distance = self.manifold.ambient_distance(prediction, target) # geodesic distance after projecting the ambient space to the manifold
         else:
-            distance = self.manifold.distance(prediction, target) # geodesic distance in the manifold
-        result = distance.square().mean()
+            distance = self.manifold.distance(target, prediction) # geodesic distance in the manifold
+        result = distance.pow(2).mean()
         if self.normalize_loss:
             result = result / self.manifold.intrinsic_dim
         return result
@@ -148,7 +148,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
             )
         scale = remaining.reciprocal()
         if self.max_velocity_scale is not None:
-            scale = scale.clamp(max=self.max_velocity_scale)
+            scale = torch.clamp(scale,min=0, max=self.max_velocity_scale)
         if self.support == "extrinsic":
             return (x_T - x_t) * scale
         tangent = self.manifold.log_map(x_t, x_T) * scale

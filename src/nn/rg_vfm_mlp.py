@@ -181,10 +181,22 @@ class RGVFMMLP(nn.Module):
         for hidden_layer in self.endpoint_net:
             hidden = hidden_layer(torch.cat([hidden, h_t], dim=-1))
             hidden = self.activation(hidden)
-        # wrap the output back to the period
         hidden = self.output_layer(hidden)
-        hidden = self.manifold.project_to_manifold(hidden)
-        return hidden
+        return self._format_output(hidden, x_t)
+
+    def _format_output(
+        self,
+        raw_output: torch.Tensor,
+        x_t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map the raw network output to an RG-VFM endpoint.
+
+        Kept as a small override point so the same periodic feature extractor
+        can also be used by velocity models without wrapping tangent vectors
+        into ``[0, 1)``.
+        """
+        del x_t
+        return self.manifold.project_to_manifold(raw_output)
 
 
 __all__ = ["RGVFMMLP"]

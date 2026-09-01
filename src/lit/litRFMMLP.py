@@ -1,4 +1,4 @@
-"""Lightning wrapper for training an RG-VFM endpoint-prediction MLP."""
+"""Lightning wrapper for Riemannian velocity matching with an MLP."""
 
 from typing import Any
 
@@ -6,21 +6,21 @@ import lightning as L
 import torch
 from torch import nn
 
-from src.flow_matching.rg_vfm import RGVFM
+from src.flow_matching.rfm import RFM
 
 
-class LitRGVFMMLP(L.LightningModule):
-    """Train a time-conditioned MLP with the RG-VFM objective.
+class LitRFMMLP(L.LightningModule):
+    """Train a time-conditioned MLP against conditional geodesic velocity.
 
-    Each batch contains terminal data samples ``x_T``. RG-VFM samples a prior
-    state and an intermediate state ``x_t``; the network then regresses
-    ``x_T`` from ``(t, x_t)`` using squared geodesic distance.
+    In addition to the actual loss, the module logs a zero-velocity baseline.
+    This exposes the analogue of the identity-flow degeneration: a useful
+    model must beat the baseline and predict a non-trivial vector field.
     """
 
     def __init__(
         self,
         model: nn.Module,
-        rg_vfm: RGVFM,
+        rfm: RFM,
         flow_kwargs: dict[str, Any],
         batch_size: int,
         lr: float = 1e-3,
@@ -32,29 +32,26 @@ class LitRGVFMMLP(L.LightningModule):
             raise ValueError(f"lr must be positive, got {lr}")
 
         self.model = model
-        self.rg_vfm = rg_vfm
+        self.rfm = rfm
         self.flow_kwargs = dict(flow_kwargs)
         self.batch_size = batch_size
         self.lr = lr
         self._train_loss: list[torch.Tensor] = []
-        self.save_hyperparameters(ignore=["model", "rg_vfm"])
+        self.save_hyperparameters(ignore=["model", "rfm"])
 
     def forward(self, t: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
-        """Predict the terminal state ``x_T`` using RG-VFM's time-first API."""
         return self.model(t, x_t)
 
     def _prepare_batch(self, batch: Any) -> torch.Tensor:
-        """Extract a floating-point data tensor from a standard loader batch."""
         if isinstance(batch, (tuple, list)):
             if len(batch) != 1:
                 raise ValueError(
-                    "RG-VFM expects an unlabeled tensor batch or a one-item batch"
+                    "RFM expects an unlabeled tensor batch or a one-item batch"
                 )
             batch = batch[0]
         if not isinstance(batch, torch.Tensor):
             raise TypeError(
-                "RG-VFM MLP batches must be tensors, "
-                f"got {type(batch).__name__}"
+                f"RFM MLP batches must be tensors, got {type(batch).__name__}"
             )
 
         parameter = next(self.model.parameters(), None)
@@ -63,50 +60,37 @@ class LitRGVFMMLP(L.LightningModule):
 
     def _shared_step(self, batch: Any, stage: str) -> torch.Tensor:
         x_data = self._prepare_batch(batch)
-        t, x_t, target_x_T = self.rg_vfm.sample_training_pair(
+        t, x_t, target_velocity = self.rfm.sample_training_pair(
             x_data,
-            time_distribution=self.flow_kwargs.get(
-                "time_distribution",
-                "uniform",
-            ),
+            time_distribution=self.flow_kwargs.get("time_distribution", "uniform"),
             t_min=self.flow_kwargs.get("t_min", 0.0),
             constant_time=self.flow_kwargs.get("constant_time", 0.5),
         )
-        pred_x_T = self(t, x_t)
-        loss = self.rg_vfm.loss(
-            pred_x_T,
-            target_x_T,
+        pred_velocity = self(t, x_t)
+        loss = self.rfm.loss(
+            pred_velocity,
+            target_velocity,
             x_t=x_t,
             t=t,
         )
 
-        # A model that returns x_t induces a zero vector field. On periodic
-        # data this identity-flow baseline can sit deceptively close to the
-        # Bayes endpoint loss, so log the gain over it explicitly.
-        identity_loss = self.rg_vfm.loss(
-            x_t,
-            target_x_T,
+        zero_velocity_loss = self.rfm.loss(
+            torch.zeros_like(target_velocity),
+            target_velocity,
             x_t=x_t,
             t=t,
         )
-        if self.rg_vfm.support == "extrinsic":
-            endpoint_movement = self.rg_vfm.manifold.ambient_distance(
-                pred_x_T,
-                x_t,
-            ).mean()
-        else:
-            endpoint_movement = self.rg_vfm.manifold.distance(
-                pred_x_T,
-                x_t,
-            ).mean()
-
+        pred_velocity_rms = pred_velocity.square().mean().sqrt()
+        target_velocity_rms = target_velocity.square().mean().sqrt()
+        metrics = {
+            f"{stage}/loss": loss,
+            f"{stage}/zero_velocity_loss": zero_velocity_loss,
+            f"{stage}/loss_gain_over_zero": zero_velocity_loss - loss.detach(),
+            f"{stage}/pred_velocity_rms": pred_velocity_rms,
+            f"{stage}/target_velocity_rms": target_velocity_rms,
+        }
         self.log_dict(
-            {
-                f"{stage}/loss": loss,
-                f"{stage}/identity_loss": identity_loss,
-                f"{stage}/loss_gain_over_identity": identity_loss - loss.detach(),
-                f"{stage}/endpoint_movement": endpoint_movement,
-            },
+            metrics,
             on_step=stage == "train",
             on_epoch=True,
             prog_bar=stage in ("train", "val"),
@@ -118,7 +102,6 @@ class LitRGVFMMLP(L.LightningModule):
                 loss,
                 on_step=False,
                 on_epoch=True,
-                prog_bar=False,
                 batch_size=x_data.shape[0],
             )
         return loss
@@ -160,16 +143,15 @@ class LitRGVFMMLP(L.LightningModule):
         n_steps: int = 100,
         return_trajectory: bool = False,
     ):
-        """Draw samples from the trained RG-VFM model."""
         if n_samples < 1:
             raise ValueError(f"n_samples must be positive, got {n_samples}")
         parameter = next(self.model.parameters())
-        x_0 = self.rg_vfm.sample_prior(
-            (n_samples, self.rg_vfm.model_dim),
+        x_0 = self.rfm.sample_prior(
+            (n_samples, self.rfm.manifold.intrinsic_dim),
             device=parameter.device,
             dtype=parameter.dtype,
         )
-        return self.rg_vfm.sample(
+        return self.rfm.sample(
             self.model,
             x_0,
             n_steps=n_steps,
@@ -180,4 +162,4 @@ class LitRGVFMMLP(L.LightningModule):
         return torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
 
-__all__ = ["LitRGVFMMLP"]
+__all__ = ["LitRFMMLP"]
