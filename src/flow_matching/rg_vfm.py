@@ -108,8 +108,13 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         x_t: Optional[torch.Tensor] = None,
         t: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Mean squared geodesic distance to the target ``x_T``."""
-        del x_t, t
+        """Time-weighted squared geodesic distance to the target ``x_T``.
+
+        Each sample is weighted by ``1 / (total_time - t)^2`` before the
+        batch reduction.  Omitting ``t`` is equivalent to evaluating the
+        objective at ``t=0``.
+        """
+        del x_t
         if prediction.shape != target.shape:
             raise ValueError(
                 "prediction and target must have the same shape, "
@@ -119,7 +124,19 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
             distance = self.manifold.ambient_distance(prediction, target) # geodesic distance after projecting the ambient space to the manifold
         else:
             distance = self.manifold.distance(target, prediction) # geodesic distance in the manifold
-        result = distance.pow(2).mean()
+        if t is None:
+            times = torch.zeros(
+                (prediction.shape[0], 1),
+                device=prediction.device,
+                dtype=prediction.dtype,
+            )
+        else:
+            times = self.batch_time(t, prediction)
+        remaining = self.total_time - times.squeeze(-1)
+        if torch.any(remaining <= 0):
+            raise ValueError("RG-VFM loss is undefined at or after total_time")
+        weight = remaining.pow(-2)
+        result = (weight * distance.pow(2)).mean()
         if self.normalize_loss:
             result = result / self.manifold.intrinsic_dim
         return result

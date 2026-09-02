@@ -27,7 +27,7 @@ flow = RGVFM(FlatTorus01(dim=2))
 x_0 = flow.sample_prior(x_data)
 t, x_t, x_T = flow.sample_training_pair(x_data, x_0)
 prediction = model(t, x_t)
-loss = flow.loss(prediction, x_T)
+loss = flow.loss(prediction, x_T, t=t)
 
 # The learned ODE also calls the model as model(t, x).
 times, trajectory = flow.sample(

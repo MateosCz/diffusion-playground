@@ -94,6 +94,31 @@ def test_loss_uses_geodesic_distance_across_periodic_boundary():
     torch.testing.assert_close(flow.loss(pred, target), torch.tensor(0.01))
 
 
+def test_loss_applies_inverse_squared_remaining_time_per_sample():
+    flow = make_flow()
+    pred = torch.tensor([[0.1], [0.2]])
+    target = torch.zeros_like(pred)
+    times = torch.tensor([[0.0], [0.5]])
+
+    loss = flow.loss(pred, target, t=times)
+
+    # (0.1^2 / (1 - 0)^2 + 0.2^2 / (1 - 0.5)^2) / 2
+    torch.testing.assert_close(loss, torch.tensor(0.085))
+
+
+def test_loss_rejects_time_at_terminal_endpoint():
+    flow = make_flow()
+    pred = torch.tensor([[0.1]])
+    target = torch.tensor([[0.0]])
+
+    try:
+        flow.loss(pred, target, t=torch.tensor([[1.0]]))
+    except ValueError as error:
+        assert "undefined at or after total_time" in str(error)
+    else:
+        raise AssertionError("expected terminal-time loss to fail")
+
+
 def test_backward_step_converts_x_T_to_velocity():
     flow = make_flow()
     x_t = torch.tensor([[0.9]])
