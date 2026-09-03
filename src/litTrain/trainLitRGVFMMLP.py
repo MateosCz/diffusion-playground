@@ -47,6 +47,8 @@ rg_vfm_kwargs = {
     "time_eps": 1e-5,
     "noise_scale": 0.0,
     "max_velocity_scale": 5.0,
+    "max_loss_weight": 100.0,
+    "normalize_loss_weights": True,
     "normalize_loss": False,
     "support": "intrinsic",
     "intrinsic_prior_std": 1.0,

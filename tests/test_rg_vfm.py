@@ -106,6 +106,30 @@ def test_loss_applies_inverse_squared_remaining_time_per_sample():
     torch.testing.assert_close(loss, torch.tensor(0.085))
 
 
+def test_loss_caps_and_batch_normalizes_time_weights():
+    flow = make_flow(max_loss_weight=100.0, normalize_loss_weights=True)
+    pred = torch.tensor([[0.1], [0.2]])
+    target = torch.zeros_like(pred)
+    times = torch.tensor([[0.0], [0.99]])
+
+    loss = flow.loss(pred, target, t=times)
+
+    capped_weights = torch.tensor([1.0, 100.0])
+    normalized_weights = capped_weights / capped_weights.mean()
+    expected = (normalized_weights * pred.squeeze(-1).pow(2)).mean()
+    torch.testing.assert_close(loss, expected)
+
+
+def test_max_loss_weight_must_be_positive():
+    for max_weight in (0.0, -1.0):
+        try:
+            make_flow(max_loss_weight=max_weight)
+        except ValueError as error:
+            assert "max_loss_weight must be positive or None" in str(error)
+        else:
+            raise AssertionError("expected invalid maximum loss weight to fail")
+
+
 def test_loss_rejects_time_at_terminal_endpoint():
     flow = make_flow()
     pred = torch.tensor([[0.1]])

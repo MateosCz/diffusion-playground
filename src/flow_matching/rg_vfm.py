@@ -37,6 +37,8 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         time_eps: float = 1e-5,
         noise_scale: float = 0.0,
         max_velocity_scale: Optional[float] = 5.0,
+        max_loss_weight: Optional[float] = None,
+        normalize_loss_weights: bool = False,
         normalize_loss: bool = False,
         support: Literal["intrinsic", "extrinsic"] = "intrinsic",
         intrinsic_prior_std: float = 1.0,
@@ -56,6 +58,11 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
                 "max_velocity_scale must be positive or None, "
                 f"got {max_velocity_scale}"
             )
+        if max_loss_weight is not None and max_loss_weight <= 0:
+            raise ValueError(
+                "max_loss_weight must be positive or None, "
+                f"got {max_loss_weight}"
+            )
         if support not in ("intrinsic", "extrinsic"):
             raise ValueError(
                 f"support must be 'intrinsic' or 'extrinsic', got {support!r}"
@@ -66,6 +73,10 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
             raise ValueError("ambient_prior_scale must be positive")
         self.noise_scale = float(noise_scale)
         self.max_velocity_scale = max_velocity_scale
+        self.max_loss_weight = (
+            None if max_loss_weight is None else float(max_loss_weight)
+        )
+        self.normalize_loss_weights = normalize_loss_weights
         self.normalize_loss = normalize_loss
         self.support = support
         self.intrinsic_prior_std = float(intrinsic_prior_std)
@@ -111,8 +122,9 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         """Time-weighted squared geodesic distance to the target ``x_T``.
 
         Each sample is weighted by ``1 / (total_time - t)^2`` before the
-        batch reduction.  Omitting ``t`` is equivalent to evaluating the
-        objective at ``t=0``.
+        batch reduction. The weights can be capped with ``max_loss_weight``
+        and normalized to have batch mean one with ``normalize_loss_weights``.
+        Omitting ``t`` is equivalent to evaluating the objective at ``t=0``.
         """
         del x_t
         if prediction.shape != target.shape:
@@ -136,6 +148,10 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         if torch.any(remaining <= 0):
             raise ValueError("RG-VFM loss is undefined at or after total_time")
         weight = remaining.pow(-2)
+        if self.max_loss_weight is not None:
+            weight = weight.clamp_max(self.max_loss_weight)
+        if self.normalize_loss_weights:
+            weight = weight / weight.mean().detach()
         result = (weight * distance.pow(2)).mean()
         if self.normalize_loss:
             result = result / self.manifold.intrinsic_dim
