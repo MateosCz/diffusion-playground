@@ -33,6 +33,7 @@ class RGVFMMLP(nn.Module):
         position_fourier_bands: int = 1,
         position_period: float | Sequence[float] | torch.Tensor = 2 * torch.pi,
         with_sincos_position: bool = True,
+        with_residual_position: bool = False,
         manifold: BaseManifold = None,
         **kwargs,
     ) -> None:
@@ -81,6 +82,7 @@ class RGVFMMLP(nn.Module):
         self.time_embedding_scale = float(time_embedding_scale)
         self.position_fourier_bands = position_fourier_bands
         self.with_sincos_position = with_sincos_position
+        self.with_residual_position = with_residual_position
         self.manifold = manifold
         position_period_tensor = torch.as_tensor(
             position_period,
@@ -144,6 +146,7 @@ class RGVFMMLP(nn.Module):
             raise ValueError(
                 f"x_t must have shape (batch, {self.dim}), got {tuple(x_t.shape)}"
             )
+        x_t_res = x_t # residual position
         if t.ndim == 1:
             t = t.unsqueeze(-1)
         if t.shape != (x_t.shape[0], 1):
@@ -182,6 +185,11 @@ class RGVFMMLP(nn.Module):
             hidden = hidden_layer(torch.cat([hidden, h_t], dim=-1))
             hidden = self.activation(hidden)
         hidden = self.output_layer(hidden)
+        if self.with_residual_position:
+            hidden = hidden * 0.1
+            hidden = hidden + x_t_res
+        else:
+            hidden = hidden
         return self._format_output(hidden, x_t)
 
     def _format_output(

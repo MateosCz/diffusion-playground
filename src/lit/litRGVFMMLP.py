@@ -32,6 +32,13 @@ class LitRGVFMMLP(L.LightningModule):
             raise ValueError(f"lr must be positive, got {lr}")
 
         self.model = model
+        if self.model.with_residual_position:
+            nn.init.normal_(
+                self.model.output_layer.weight,
+                mean=0.0,
+                std=0.01,
+            )
+            nn.init.zeros_(self.model.output_layer.bias)
         self.rg_vfm = rg_vfm
         self.flow_kwargs = dict(flow_kwargs)
         self.batch_size = batch_size
