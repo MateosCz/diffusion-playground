@@ -14,6 +14,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 import wandb
 from datetime import datetime
 from src.device import get_default_device, get_lightning_accelerator
+from src.lit.callbacks import last_checkpoint
 
 pt_invariant = True
 total_time = 2.0
@@ -192,13 +193,14 @@ def main():
         project = "diffusion-playground",
         checkpoint_name = "nozerocog"
     )
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name_no_zero_cog}"
     checkpoint_callback = ModelCheckpoint(
-        dirpath = f"checkpoints/{timestamp}/{experiment_name_no_zero_cog}",
+        dirpath = checkpoint_dir,
         filename = "nozerocog_{epoch:02d}-{val_loss:.4f}",
         monitor = "val_loss",
         mode = "min",
         save_top_k = 1,
-        save_last = True
+        save_last = False
     )
 
     trainer_no_zero_cog = L.Trainer(
@@ -206,7 +208,7 @@ def main():
         max_epochs=n_epoch,
         accelerator=accelerator,
         log_every_n_steps=32,
-        callbacks = [checkpoint_callback]
+        callbacks = [checkpoint_callback, last_checkpoint(checkpoint_dir)]
     )
 
     trainer_no_zero_cog.fit(model=lit_gnn_no_zero_cog, train_dataloaders=loader)
@@ -228,13 +230,14 @@ def main():
         checkpoint_name = "zerocogscore"
     )
 
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name_zero_cog_score}"
     checkpoint_callback = ModelCheckpoint(
-        dirpath = f"checkpoints/{timestamp}/{experiment_name_zero_cog_score}",
+        dirpath = checkpoint_dir,
         filename = "zerocogscore_{epoch:02d}-{val_loss:.4f}",
         monitor = "val_loss",
         mode = "min",
         save_top_k = 1,
-        save_last = True
+        save_last = False
     )   
     
     trainer_zero_cog_score = L.Trainer(
@@ -242,7 +245,7 @@ def main():
         max_epochs=n_epoch,
         accelerator=accelerator,
         log_every_n_steps=32,
-        callbacks = [checkpoint_callback]
+        callbacks = [checkpoint_callback, last_checkpoint(checkpoint_dir)]
     )
 
 
@@ -265,20 +268,21 @@ def main():
         project = "diffusion-playground",
         checkpoint_name = "zerocog_nozerocogscore"
     )
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name_no_zero_cog_score}"
     checkpoint_callback = ModelCheckpoint(
-        dirpath = f"checkpoints/{timestamp}/{experiment_name_no_zero_cog_score}",
+        dirpath = checkpoint_dir,
         filename = "nozerocogscore_{epoch:02d}-{val_loss:.4f}",
         monitor = "val_loss",
         mode = "min",
         save_top_k = 1,
-        save_last = True
+        save_last = False
     )
     trainer_no_zero_cog_score = L.Trainer(
         logger=wandb_logger_no_zero_cog_score,
         max_epochs=n_epoch,
         accelerator=accelerator,
         log_every_n_steps=32,
-        callbacks = [checkpoint_callback]
+        callbacks = [checkpoint_callback, last_checkpoint(checkpoint_dir)]
     )
     trainer_no_zero_cog_score.fit(model=lit_gnn_no_zero_cog_score, train_dataloaders=loader)
     wandb.finish()

@@ -27,6 +27,7 @@ from src.diffusion.continuous import ContinuousDiffusion
 from src.diffusion.kldm import KLDM
 from src.diffusion.sde import VPSDE, LinearSchedule
 from src.lit.litCSPVNet import LitCSPVNet
+from src.lit.callbacks import last_checkpoint
 from src.device import get_default_device, get_lightning_accelerator
 
 
@@ -189,13 +190,14 @@ def main():
         checkpoint_name=experiment_name,
     )
 
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"checkpoints/{timestamp}/{experiment_name}",
+        dirpath=checkpoint_dir,
         filename="cspvnet_{epoch:02d}-{val/rmse:.4f}",
         monitor="val/rmse",
         mode="min",
         save_top_k=1,
-        save_last=True,
+        save_last=False,
         auto_insert_metric_name=False,
     )
 
@@ -206,7 +208,7 @@ def main():
         log_every_n_steps=32,
         check_val_every_n_epoch=50,  # CSP sampling eval is expensive; run it every 10 epochs
         gradient_clip_val=1.0,  # match the hand-written loops; prevents score-matching blow-ups
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, last_checkpoint(checkpoint_dir)],
     )
 
     trainer.fit(

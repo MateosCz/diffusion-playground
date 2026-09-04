@@ -16,6 +16,7 @@ from src.dataLib.synthetic import (
 from src.device import get_default_device, get_lightning_accelerator
 from src.flow_matching import RGVFM
 from src.lit.checkerboard_generation_metrics import CheckerboardGenerationMetrics
+from src.lit.callbacks import last_checkpoint
 from src.lit.litRGVFMMLP import LitRGVFMMLP
 from src.manifolds import FlatTorus01
 from src.nn.rg_vfm_mlp import RGVFMMLP
@@ -65,6 +66,7 @@ nn_kwargs = {
     "time_embedding_scale": 1.0,
     "position_fourier_bands": 8,
     # Raw coordinates create an artificial discontinuity at the 0/1 seam.
+    "with_residual_position": True,
     "with_sincos_position": True,
 }
 
@@ -157,10 +159,13 @@ def main() -> None:
         monitor="val_loss",
         mode="min",
         save_top_k=1,
-        save_last=True,
+        save_last=False,
         auto_insert_metric_name=False,
     )
-    callbacks: list[L.Callback] = [loss_checkpoint]
+    callbacks: list[L.Callback] = [
+        loss_checkpoint,
+        last_checkpoint(checkpoint_dir),
+    ]
     if dataset_name == "checkerboard":
         callbacks.extend(
             [

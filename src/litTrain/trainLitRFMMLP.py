@@ -13,6 +13,7 @@ from src.dataLib.synthetic import Checkerboard_Dataset, Pacman_Dataset
 from src.device import get_default_device, get_lightning_accelerator
 from src.flow_matching import RFM
 from src.lit.checkerboard_generation_metrics import CheckerboardGenerationMetrics
+from src.lit.callbacks import last_checkpoint
 from src.lit.litRFMMLP import LitRFMMLP
 from src.manifolds import FlatTorus01
 from src.nn.rfm_mlp import RFMMLP
@@ -144,10 +145,13 @@ def main() -> None:
         monitor="val_loss",
         mode="min",
         save_top_k=1,
-        save_last=True,
+        save_last=False,
         auto_insert_metric_name=False,
     )
-    callbacks: list[L.Callback] = [loss_checkpoint]
+    callbacks: list[L.Callback] = [
+        loss_checkpoint,
+        last_checkpoint(checkpoint_dir),
+    ]
     if dataset_name == "checkerboard":
         callbacks.extend(
             [
