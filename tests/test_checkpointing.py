@@ -1,4 +1,4 @@
-from src.lit.checkpointing import last_checkpoint
+from src.lit.callbacks import last_checkpoint
 
 
 def test_last_checkpoint_is_independent_of_top_k_metric(tmp_path):
