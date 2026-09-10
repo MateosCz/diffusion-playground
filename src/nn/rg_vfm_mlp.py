@@ -35,6 +35,7 @@ class RGVFMMLP(nn.Module):
         with_sincos_position: bool = True,
         with_residual_position: bool = False,
         manifold: BaseManifold = None,
+        residual_position_scale: float = 0.1,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -74,6 +75,7 @@ class RGVFMMLP(nn.Module):
         # end of checking the hidden_dim
 
         self.dim = dim
+        # self.residual_position_scale = residual_position_scale
         self.output_dim = output_dim
         self.x_lifting_dim = x_lifting_dim
         self.time_embedding_half_dim = time_embedding_half_dim
@@ -82,7 +84,7 @@ class RGVFMMLP(nn.Module):
         self.time_embedding_scale = float(time_embedding_scale)
         self.position_fourier_bands = position_fourier_bands
         self.with_sincos_position = with_sincos_position
-        self.with_residual_position = with_residual_position
+        # self.with_residual_position = with_residual_position
         self.manifold = manifold
         position_period_tensor = torch.as_tensor(
             position_period,
@@ -103,6 +105,17 @@ class RGVFMMLP(nn.Module):
             "position_period",
             position_period_tensor.clone(),
         )
+        self.register_buffer(
+            "residual_position_scale",
+            torch.tensor(residual_position_scale, dtype=torch.float32),
+        )
+
+        self.register_buffer(
+            "with_residual_position",
+            torch.tensor(with_residual_position, dtype=torch.bool),
+        )
+
+
 
         position_embedding_dim = (
             dim * 2 * position_fourier_bands
@@ -146,7 +159,7 @@ class RGVFMMLP(nn.Module):
             raise ValueError(
                 f"x_t must have shape (batch, {self.dim}), got {tuple(x_t.shape)}"
             )
-        x_t_res = x_t # residual position
+        x_t_identity = x_t # residual position
         if t.ndim == 1:
             t = t.unsqueeze(-1)
         if t.shape != (x_t.shape[0], 1):
@@ -186,8 +199,8 @@ class RGVFMMLP(nn.Module):
             hidden = self.activation(hidden)
         hidden = self.output_layer(hidden)
         if self.with_residual_position:
-            hidden = hidden * 0.1
-            hidden = hidden + x_t_res
+            hidden = hidden * self.residual_position_scale
+            hidden = hidden + x_t_identity
         else:
             hidden = hidden
         return self._format_output(hidden, x_t)

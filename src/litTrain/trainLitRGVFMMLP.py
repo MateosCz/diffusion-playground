@@ -4,6 +4,7 @@ from datetime import datetime
 
 import lightning as L
 import torch
+from torch._inductor.ir import NoneAsConstantBuffer
 import wandb
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
@@ -32,7 +33,7 @@ lr = 1e-4
 batch_size = 512
 num_workers = 0
 
-dataset_name = "pacman"  # "checkerboard" or "pacman"
+dataset_name = "checkerboard"  # "checkerboard" or "pacman"
 pacman_path = "data/pacman.npy"
 train_size = 50_000
 val_size = 4_096
@@ -47,20 +48,21 @@ rg_vfm_kwargs = {
     "total_time": total_time,
     "time_eps": 1e-5,
     "noise_scale": 0.0,
-    "max_velocity_scale": 5.0,
+    "max_velocity_scale": None,
     "max_loss_weight": 100.0,
-    "normalize_loss_weights": True,
+    "normalize_loss_weights": False, # True or False
     "normalize_loss": False,
     "support": "intrinsic",
     "intrinsic_prior_std": 1.0,
     "integrator": "euler",
+    "is_loss_weighted": True,
 }
 
 nn_kwargs = {
     "dim": dim,
     "x_lifting_dim": 256,
     "time_embedding_half_dim": 128,
-    "hidden_dim": [512, 1024, 1024, 512],
+    "hidden_dim": [512, 1024, 512],
     "output_dim": dim,
     "total_time": total_time,
     "time_embedding_scale": 1.0,
@@ -68,6 +70,7 @@ nn_kwargs = {
     # Raw coordinates create an artificial discontinuity at the 0/1 seam.
     "with_residual_position": True,
     "with_sincos_position": True,
+    "residual_position_scale": 0.1,
 }
 
 generation_eval_every_n_epochs = 25
@@ -137,16 +140,20 @@ def main() -> None:
     train_loader, val_loader = build_loaders()
     manifold = build_manifold()
 
+    normalize_loss_weights_flag = 'normalized_loss_weight' if rg_vfm_kwargs['normalize_loss_weights'] else 'unnormalized_loss_weight'
+    loss_weighted_flag = normalize_loss_weights_flag if rg_vfm_kwargs['is_loss_weighted'] else 'unweighted_loss'
+    experiment_name = f"RGVFMMLP_{dataset_name}_fractional_{'no_res' if not nn_kwargs['with_residual_position'] else 'res_scale_' + str(nn_kwargs['residual_position_scale'])}_{loss_weighted_flag}"
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     lit_model = LitRGVFMMLP(
         model=build_model(manifold),
         rg_vfm=build_rg_vfm(manifold),
         flow_kwargs=flow_kwargs,
+        rg_vfm_kwargs=rg_vfm_kwargs,
+        nn_kwargs=nn_kwargs,
+        experiment_name_timestamp=experiment_name+"_"+timestamp,
         batch_size=batch_size,
         lr=lr,
     )
-
-    experiment_name = f"RGVFMMLP_{dataset_name}_fractional"
-    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",

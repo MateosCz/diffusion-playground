@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 217, in <module>
+    main()
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 148, in main
+    experiment_name_timestamp=experiment_name+"_"+timestamp,
+                              ^^^^^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'experiment_name' where it is not associated with a value
