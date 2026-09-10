@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 219, in <module>
+    main()
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 148, in main
+    model=build_model(manifold),
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 124, in build_model
+    return RGVFMMLP(
+           ^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/src/nn/rg_vfm_mlp.py", line 110, in __init__
+    torch.tensor(residual_position_scale, dtype=torch.float32),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: must be real number, not NoneType

@@ -22,6 +22,9 @@ class LitRGVFMMLP(L.LightningModule):
         model: nn.Module,
         rg_vfm: RGVFM,
         flow_kwargs: dict[str, Any],
+        rg_vfm_kwargs: dict[str, Any], # for logging
+        nn_kwargs: dict[str, Any], # for logging
+        experiment_name_timestamp: str, # for logging
         batch_size: int,
         lr: float = 1e-3,
     ) -> None:
@@ -40,6 +43,8 @@ class LitRGVFMMLP(L.LightningModule):
             )
             nn.init.zeros_(self.model.output_layer.bias)
         self.rg_vfm = rg_vfm
+        self.rg_vfm_kwargs = rg_vfm_kwargs # for logging
+        self.nn_kwargs = nn_kwargs # for logging
         self.flow_kwargs = dict(flow_kwargs)
         self.batch_size = batch_size
         self.lr = lr
@@ -58,11 +63,11 @@ class LitRGVFMMLP(L.LightningModule):
                     "RG-VFM expects an unlabeled tensor batch or a one-item batch"
                 )
             batch = batch[0]
-        if not isinstance(batch, torch.Tensor):
-            raise TypeError(
-                "RG-VFM MLP batches must be tensors, "
-                f"got {type(batch).__name__}"
-            )
+        # if not isinstance(batch, torch.Tensor):
+        #     raise TypeError(
+        #         "RG-VFM MLP batches must be tensors, "
+        #         f"got {type(batch).__name__}"
+        #     )
 
         parameter = next(self.model.parameters(), None)
         dtype = parameter.dtype if parameter is not None else torch.float32

@@ -43,6 +43,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         support: Literal["intrinsic", "extrinsic"] = "intrinsic",
         intrinsic_prior_std: float = 1.0,
         ambient_prior_scale: float = 1.0,
+        is_loss_weighted: bool = True,
         integrator: str | BaseODEIntegrator = "euler",
     ) -> None:
         super().__init__(
@@ -81,7 +82,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         self.support = support
         self.intrinsic_prior_std = float(intrinsic_prior_std)
         self.ambient_prior_scale = float(ambient_prior_scale)
-
+        self.is_loss_weighted = is_loss_weighted
     @property
     def model_dim(self) -> int:
         """Feature dimension seen by the ``x_T``-predicting model."""
@@ -147,21 +148,23 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         remaining = self.total_time - times.squeeze(-1)
         if torch.any(remaining <= 0):
             raise ValueError("RG-VFM loss is undefined at or after total_time")
-        weight = remaining.pow(-2)
-        if self.max_loss_weight is not None:
-            weight = weight.clamp_max(self.max_loss_weight)
-        if self.normalize_loss_weights:
-            weight = weight / weight.mean().detach()
-        result = (weight * distance.pow(2)).mean()
-        if self.normalize_loss:
-            result = result / self.manifold.intrinsic_dim
-        return result
+        if self.is_loss_weighted:
+            weight = remaining.pow(-2)
+            if self.max_loss_weight is not None:
+                weight = weight.clamp_max(self.max_loss_weight)
+            if self.normalize_loss_weights:
+                weight = weight / weight.mean().detach()
+            result = (weight * distance.pow(2)).mean()
+            if self.normalize_loss:
+                result = result / self.manifold.intrinsic_dim
+            return result
+        return distance.pow(2).mean()
 
     def x_T_to_vector_field(
         self,
         t: torch.Tensor | float,
         x_t: torch.Tensor,
-        x_T: torch.Tensor,
+        x_T: torch.Tensor, # pred_x_T when inference
     ) -> torch.Tensor:
         """Convert a predicted terminal state ``x_T`` into a tangent velocity."""
         self._validate_model_state(x_t, "x_t")
