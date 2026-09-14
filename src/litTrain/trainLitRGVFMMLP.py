@@ -4,7 +4,6 @@ from datetime import datetime
 
 import lightning as L
 import torch
-from torch._inductor.ir import NoneAsConstantBuffer
 import wandb
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
@@ -20,7 +19,7 @@ from src.lit.checkerboard_generation_metrics import CheckerboardGenerationMetric
 from src.lit.callbacks import last_checkpoint
 from src.lit.litRGVFMMLP import LitRGVFMMLP
 from src.manifolds import FlatTorus01
-from src.nn.rg_vfm_mlp import RGVFMMLP
+from src.nn.rg_vfm_mlp import EX_RGVFMMLP, RGVFMMLP
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +51,7 @@ rg_vfm_kwargs = {
     "max_loss_weight": 100.0,
     "normalize_loss_weights": False, # True or False
     "normalize_loss": False,
-    "support": "intrinsic",
+    "support": "extrinsic",  # "intrinsic" or "extrinsic"
     "intrinsic_prior_std": 1.0,
     "integrator": "euler",
     "is_loss_weighted": True,
@@ -76,6 +75,10 @@ nn_kwargs = {
 generation_eval_every_n_epochs = 25
 generation_eval_samples = 4_096
 generation_eval_steps = 100
+
+# Extrinsic geometry and dimensions are selected automatically. Override
+# residual prediction here independently of the intrinsic configuration.
+extrinsic_nn_kwargs = {"with_residual_position": False}
 
 
 def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
@@ -121,11 +124,21 @@ def build_manifold(manifold_dim: int = dim) -> FlatTorus01:
 
 def build_model(manifold: FlatTorus01 | None = None) -> RGVFMMLP:
     manifold = manifold or build_manifold()
-    return RGVFMMLP(
-        **nn_kwargs,
+    model_class = EX_RGVFMMLP if rg_vfm_kwargs["support"] == "extrinsic" else RGVFMMLP
+    return model_class(
+        **build_nn_kwargs(manifold),
         position_period=manifold.period,
         manifold=manifold,
     )
+
+
+def build_nn_kwargs(manifold: FlatTorus01) -> dict:
+    kwargs = dict(nn_kwargs)
+    if rg_vfm_kwargs["support"] == "extrinsic":
+        kwargs.update(extrinsic_nn_kwargs)
+        kwargs.update(dim=manifold.ambient_dim, output_dim=manifold.ambient_dim,
+                      with_sincos_position=False)
+    return kwargs
 
 
 def build_rg_vfm(manifold: FlatTorus01 | None = None) -> RGVFM:
@@ -140,16 +153,18 @@ def main() -> None:
     train_loader, val_loader = build_loaders()
     manifold = build_manifold()
 
+    model_kwargs = build_nn_kwargs(manifold)
+
     normalize_loss_weights_flag = 'normalized_loss_weight' if rg_vfm_kwargs['normalize_loss_weights'] else 'unnormalized_loss_weight'
     loss_weighted_flag = normalize_loss_weights_flag if rg_vfm_kwargs['is_loss_weighted'] else 'unweighted_loss'
-    experiment_name = f"RGVFMMLP_{dataset_name}_fractional_{'no_res' if not nn_kwargs['with_residual_position'] else 'res_scale_' + str(nn_kwargs['residual_position_scale'])}_{loss_weighted_flag}"
+    experiment_name = f"RGVFMMLP_{dataset_name}_fractional_{rg_vfm_kwargs['support']}_{'no_res' if not model_kwargs['with_residual_position'] else 'res_scale_' + str(model_kwargs['residual_position_scale'])}_{loss_weighted_flag}"
     checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     lit_model = LitRGVFMMLP(
         model=build_model(manifold),
         rg_vfm=build_rg_vfm(manifold),
         flow_kwargs=flow_kwargs,
         rg_vfm_kwargs=rg_vfm_kwargs,
-        nn_kwargs=nn_kwargs,
+        nn_kwargs=model_kwargs,
         experiment_name_timestamp=experiment_name+"_"+timestamp,
         batch_size=batch_size,
         lr=lr,

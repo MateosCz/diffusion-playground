@@ -84,6 +84,8 @@ class CheckerboardGenerationMetrics(L.Callback):
         )
         if not isinstance(generated, torch.Tensor):
             raise TypeError("sample() must return a tensor when trajectory is disabled")
+        if hasattr(pl_module, "rg_vfm"):
+            generated = pl_module.rg_vfm.to_intrinsic(generated)
         metrics = checkerboard_distribution_metrics(
             generated,
             num_rows=self.num_rows,

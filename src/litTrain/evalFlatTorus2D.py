@@ -15,7 +15,7 @@ from src.lit.checkerboard_generation_metrics import (
 )
 from src.manifolds import FlatTorus01
 from src.nn.rfm_mlp import RFMMLP
-from src.nn.rg_vfm_mlp import RGVFMMLP
+from src.nn.rg_vfm_mlp import EX_RGVFMMLP, RGVFMMLP
 
 
 Method = Literal["rfm", "rgvfm"]
@@ -33,7 +33,7 @@ def find_checkpoint(project_root: Path, method: Method) -> Path:
         if method == "rfm"
         else "RGVFMMLP_checkerboard_fractional"
     )
-    roots = list((project_root / "checkpoints").glob(f"*/{experiment}"))
+    roots = list((project_root / "checkpoints").glob(f"*/{experiment}*"))
     distribution = [
         path
         for root in roots
@@ -83,24 +83,35 @@ def build_model_from_checkpoint(
         for layer_id in layer_ids
     )
 
-    with_sincos_position = input_features != manifold.intrinsic_dim
+    saved_nn = checkpoint.get("hyper_parameters", {}).get("nn_kwargs", {})
+    extrinsic = method == "rgvfm" and state["output_layer.weight"].shape[0] == manifold.ambient_dim
+    model_dim = manifold.ambient_dim if extrinsic else manifold.intrinsic_dim
+    with_sincos_position = input_features != model_dim
     # The frequency buffer is present even in legacy raw-coordinate models,
     # so use it to preserve strict checkpoint compatibility.
     position_fourier_bands = state["position_frequencies"].numel()
     model_class = RFMMLP if method == "rfm" else RGVFMMLP
+    if extrinsic:
+        model_class = EX_RGVFMMLP
     model = model_class(
-        dim=manifold.intrinsic_dim,
+        dim=model_dim,
         x_lifting_dim=x_lifting_dim,
         time_embedding_half_dim=time_embedding_dim // 2,
         hidden_dim=hidden_dim,
         output_dim=state["output_layer.weight"].shape[0],
-        total_time=1.0,
-        time_embedding_scale=1.0,
+        total_time=saved_nn.get("total_time", 1.0),
+        time_embedding_scale=saved_nn.get("time_embedding_scale", 1.0),
         position_fourier_bands=position_fourier_bands,
         position_period=manifold.period,
         with_sincos_position=with_sincos_position,
+        with_residual_position=saved_nn.get("with_residual_position", False),
+        residual_position_scale=saved_nn.get("residual_position_scale", 0.1),
         manifold=manifold,
     )
+    # Older checkpoints predate these buffers; use saved configuration when
+    # available, otherwise retain the historical evaluation defaults.
+    for key in ("with_residual_position", "residual_position_scale"):
+        state.setdefault(key, model.state_dict()[key])
     model.load_state_dict(state, strict=True)
     return model
 
@@ -133,14 +144,10 @@ def evaluate_checkpoint(
             integrator="euler",
         )
     else:
-        flow = RGVFM(
-            manifold,
-            noise_scale=0.001,
-            max_velocity_scale=20.0,
-            normalize_loss=False,
-            support="intrinsic",
-            integrator="euler",
-        )
+        flow_kwargs = dict(checkpoint.get("hyper_parameters", {}).get("rg_vfm_kwargs", {}))
+        flow_kwargs.setdefault("max_velocity_scale", 20.0)
+        flow_kwargs["support"] = "extrinsic" if isinstance(model, EX_RGVFMMLP) else "intrinsic"
+        flow = RGVFM(manifold, **flow_kwargs)
 
     torch.manual_seed(seed)
     parameter = next(model.parameters())
@@ -151,6 +158,8 @@ def evaluate_checkpoint(
     )
     with torch.inference_mode():
         generated = flow.sample(model, x_0, n_steps=n_steps).cpu()
+        if method == "rgvfm":
+            generated = flow.to_intrinsic(generated)
     metrics = checkerboard_distribution_metrics(generated)
 
     return {

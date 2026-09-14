@@ -220,4 +220,44 @@ class RGVFMMLP(nn.Module):
         return self.manifold.project_to_manifold(raw_output)
 
 
-__all__ = ["RGVFMMLP"]
+class EX_RGVFMMLP(RGVFMMLP):
+    """Predict embedded torus endpoints from raw ambient coordinates.
+
+    Dimensions come from the manifold. Residual prediction is optional;
+    every predicted endpoint is projected onto the embedded manifold.
+    """
+
+    def __init__(
+        self,
+        manifold: BaseManifold,
+        *,
+        x_lifting_dim: int,
+        time_embedding_half_dim: int,
+        hidden_dim: Sequence[int] | int,
+        with_residual_position: bool = False,
+        **kwargs,
+    ) -> None:
+        for name in ("dim", "output_dim"):
+            value = kwargs.pop(name, manifold.ambient_dim)
+            if value != manifold.ambient_dim:
+                raise ValueError(f"{name} must equal ambient_dim={manifold.ambient_dim}")
+        if kwargs.pop("with_sincos_position", False):
+            raise ValueError("EX_RGVFMMLP requires raw ambient coordinates")
+        super().__init__(
+            dim=manifold.ambient_dim,
+            output_dim=manifold.ambient_dim,
+            manifold=manifold,
+            x_lifting_dim=x_lifting_dim,
+            time_embedding_half_dim=time_embedding_half_dim,
+            hidden_dim=hidden_dim,
+            with_sincos_position=False,
+            with_residual_position=with_residual_position,
+            **kwargs,
+        )
+
+    def _format_output(self, raw_output: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
+        del x_t
+        return self.manifold.project_ambient(raw_output)
+
+
+__all__ = ["RGVFMMLP", "EX_RGVFMMLP"]

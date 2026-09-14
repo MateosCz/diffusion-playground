@@ -6,3 +6,4 @@ src/__pycache__/
 *.out
 data/*/*.pt
 /checkpoints/
+/src/SDECourse_exercises/

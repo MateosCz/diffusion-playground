@@ -69,10 +69,30 @@ manifold owns the embedding metadata and conversions; for example a
 ``FlatTorus01(dim=d)`` is embedded in ``R^(2d)`` with cosine/sine pairs:
 
 ```python
-flow = RGVFM(FlatTorus01(dim=2), support="extrinsic")
+from src.nn.rg_vfm_mlp import EX_RGVFMMLP
+
+manifold = FlatTorus01(dim=2)
+flow = RGVFM(manifold, support="extrinsic")
+model = EX_RGVFMMLP(
+    manifold,
+    x_lifting_dim=256,
+    time_embedding_half_dim=128,
+    hidden_dim=[512, 1024, 512],
+)  # raw 4D input, projected 4D endpoint, residual disabled by default
 x_0 = flow.sample_prior(x_data)  # shape: (batch, 4), Gaussian in R^4
 t, x_t, x_T = flow.sample_training_pair(x_data, x_0)
 
 ambient_sample = flow.sample(model, x_0, n_steps=100)
 intrinsic_sample = flow.to_intrinsic(ambient_sample)  # shape: (batch, 2)
 ```
+
+In `src/litTrain/trainLitRGVFMMLP.py`, `rg_vfm_kwargs["support"]` selects
+the intrinsic or extrinsic MLP automatically. Keep the dataset dimension at
+2; ambient network dimensions are inferred. `extrinsic_nn_kwargs` controls
+the optional residual experiment independently of intrinsic settings.
+Run training with `python -m src.litTrain.trainLitRGVFMMLP`.
+The checkerboard callback decodes generated samples before evaluation.
+`LitRGVFMMLP.sample()` continues to return model-space samples (4D for
+extrinsic); use `lit_model.rg_vfm.to_intrinsic(samples)` for plotting.
+Evaluate a saved checkpoint with
+`python -m src.litTrain.evalFlatTorus2D --method rgvfm --checkpoint PATH`.
