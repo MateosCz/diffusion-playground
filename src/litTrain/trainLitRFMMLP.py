@@ -29,7 +29,7 @@ lr = 1e-4
 batch_size = 512
 num_workers = 0
 
-dataset_name = "pacman"  # "checkerboard" or "pacman"
+dataset_name = "pacman"  # Any name starting with "checkerboard", or "pacman"
 pacman_path = "data/pacman.npy"
 train_size = 40_000
 val_size = 4_096
@@ -66,7 +66,7 @@ generation_eval_steps = 100
 
 def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
     """Create fractional-coordinate data directly in ``[0, 1)``."""
-    if name == "checkerboard":
+    if name.startswith("checkerboard"):
         return Checkerboard_Dataset(
             num_rows=4,
             dataset_size=size,
@@ -80,7 +80,7 @@ def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
             seed=seed,
         )
     raise ValueError(
-        f"dataset_name must be 'checkerboard' or 'pacman', got {name!r}"
+        f"dataset_name must start with 'checkerboard' or equal 'pacman', got {name!r}"
     )
 
 
@@ -152,7 +152,7 @@ def main() -> None:
         loss_checkpoint,
         last_checkpoint(checkpoint_dir),
     ]
-    if dataset_name == "checkerboard":
+    if dataset_name.startswith("checkerboard"):
         callbacks.extend(
             [
                 CheckerboardGenerationMetrics(

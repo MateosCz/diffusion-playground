@@ -7,3 +7,5 @@ src/__pycache__/
 data/*/*.pt
 /checkpoints/
 /src/SDECourse_exercises/
+/reports
+.DS_Store
