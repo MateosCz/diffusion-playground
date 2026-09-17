@@ -235,6 +235,7 @@ class EX_RGVFMMLP(RGVFMMLP):
         time_embedding_half_dim: int,
         hidden_dim: Sequence[int] | int,
         with_residual_position: bool = False,
+        project_to_manifold: bool = True,
         **kwargs,
     ) -> None:
         for name in ("dim", "output_dim"):
@@ -254,10 +255,14 @@ class EX_RGVFMMLP(RGVFMMLP):
             with_residual_position=with_residual_position,
             **kwargs,
         )
+        self.project_to_manifold = project_to_manifold
 
     def _format_output(self, raw_output: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
         del x_t
-        return self.manifold.project_ambient(raw_output)
+        if self.project_to_manifold:
+            return self.manifold.project_ambient(raw_output)
+        else:
+            return raw_output
 
 
 __all__ = ["RGVFMMLP", "EX_RGVFMMLP"]

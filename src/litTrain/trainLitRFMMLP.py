@@ -31,7 +31,7 @@ num_workers = 0
 
 dataset_name = "pacman"  # "checkerboard" or "pacman"
 pacman_path = "data/pacman.npy"
-train_size = 50_000
+train_size = 40_000
 val_size = 4_096
 
 flow_kwargs = {
@@ -51,7 +51,7 @@ nn_kwargs = {
     "dim": dim,
     "x_lifting_dim": 256,
     "time_embedding_half_dim": 128,
-    "hidden_dim": [512, 1024, 1024, 512],
+    "hidden_dim": [512, 1024, 512],
     "output_dim": dim,
     "total_time": total_time,
     "time_embedding_scale": 1.0,
