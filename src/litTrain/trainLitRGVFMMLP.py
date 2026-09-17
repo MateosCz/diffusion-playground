@@ -1,6 +1,8 @@
 """Train ``RGVFMMLP`` on 2D fractional-coordinate torus data."""
 
 from datetime import datetime
+from os import truncate
+from tkinter import FALSE
 
 import lightning as L
 import torch
@@ -30,11 +32,17 @@ dim = 2
 n_epoch = 2_000
 lr = 1e-4
 batch_size = 512
-num_workers = 0
+num_workers = 6
+num_rows = 4
 
 dataset_name = "checkerboard"  # "checkerboard" or "pacman"
+if dim == 2 and dataset_name == "checkerboard":
+    dataset_name = f"checkerboard_{num_rows}x{num_rows}"
+elif dim == 1 and dataset_name == "checkerboard":
+    dataset_name = f"checkerboard_{num_rows}"
+
 pacman_path = "data/pacman.npy"
-train_size = 50_000
+train_size = 40_000
 val_size = 4_096
 
 flow_kwargs = {
@@ -48,7 +56,7 @@ rg_vfm_kwargs = {
     "time_eps": 1e-5,
     "noise_scale": 0.0,
     "max_velocity_scale": None,
-    "max_loss_weight": 100.0,
+    "max_loss_weight": 20.0,
     "normalize_loss_weights": False, # True or False
     "normalize_loss": False,
     "support": "extrinsic",  # "intrinsic" or "extrinsic"
@@ -61,7 +69,7 @@ nn_kwargs = {
     "dim": dim,
     "x_lifting_dim": 256,
     "time_embedding_half_dim": 128,
-    "hidden_dim": [512, 1024, 512],
+    "hidden_dim": [512,1024, 512],
     "output_dim": dim,
     "total_time": total_time,
     "time_embedding_scale": 1.0,
@@ -69,7 +77,7 @@ nn_kwargs = {
     # Raw coordinates create an artificial discontinuity at the 0/1 seam.
     "with_residual_position": True,
     "with_sincos_position": True,
-    "residual_position_scale": 0.1,
+    "residual_position_scale": 0.01,
 }
 
 generation_eval_every_n_epochs = 25
@@ -78,14 +86,14 @@ generation_eval_steps = 100
 
 # Extrinsic geometry and dimensions are selected automatically. Override
 # residual prediction here independently of the intrinsic configuration.
-extrinsic_nn_kwargs = {"with_residual_position": False}
+extrinsic_nn_kwargs = {"with_residual_position": False, "with_sincos_position": False, "project_to_manifold": True}
 
 
 def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
     """Create fractional-coordinate data directly in ``[0, 1)``."""
-    if name == "checkerboard":
+    if name.startswith("checkerboard"):
         base_dataset = Checkerboard_Dataset(
-            num_rows=4,
+            num_rows=num_rows,
             dataset_size=size,
             seed=seed,
             dim=dim,
@@ -98,7 +106,7 @@ def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
         )
     else:
         raise ValueError(
-            f"dataset_name must be 'checkerboard' or 'pacman', got {name!r}"
+            f"dataset_name must start with 'checkerboard' or equal 'pacman', got {name!r}"
         )
     return base_dataset
 
@@ -112,8 +120,8 @@ def build_loaders() -> tuple[DataLoader, DataLoader]:
         "persistent_workers": num_workers > 0,
         "pin_memory": torch.cuda.is_available(),
     }
-    train_loader = DataLoader(train_dataset, shuffle=True, **common_kwargs)
-    val_loader = DataLoader(val_dataset, shuffle=False, **common_kwargs)
+    train_loader = DataLoader(train_dataset, shuffle=True, drop_last=True,**common_kwargs)
+    val_loader = DataLoader(val_dataset, shuffle=False, drop_last=True,**common_kwargs)
     return train_loader, val_loader
 
 
@@ -157,7 +165,8 @@ def main() -> None:
 
     normalize_loss_weights_flag = 'normalized_loss_weight' if rg_vfm_kwargs['normalize_loss_weights'] else 'unnormalized_loss_weight'
     loss_weighted_flag = normalize_loss_weights_flag if rg_vfm_kwargs['is_loss_weighted'] else 'unweighted_loss'
-    experiment_name = f"RGVFMMLP_{dataset_name}_fractional_{rg_vfm_kwargs['support']}_{'no_res' if not model_kwargs['with_residual_position'] else 'res_scale_' + str(model_kwargs['residual_position_scale'])}_{loss_weighted_flag}"
+    position_coding_flag = 'sincos' if model_kwargs['with_sincos_position'] else 'raw'
+    experiment_name = f"RGVFMMLP_{dataset_name}_fractional_{rg_vfm_kwargs['support']}_{position_coding_flag}_{'no_res' if not model_kwargs['with_residual_position'] else 'res_scale_' + str(model_kwargs['residual_position_scale'])}_{loss_weighted_flag}"
     checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     lit_model = LitRGVFMMLP(
         model=build_model(manifold),
@@ -188,7 +197,7 @@ def main() -> None:
         loss_checkpoint,
         last_checkpoint(checkpoint_dir),
     ]
-    if dataset_name == "checkerboard":
+    if dataset_name.startswith("checkerboard"):
         callbacks.extend(
             [
                 CheckerboardGenerationMetrics(

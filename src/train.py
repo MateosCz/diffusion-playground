@@ -168,7 +168,7 @@ def main():
     hidden_dim = [512,1024,512]
     output_dim = dim
     # dataset
-    if base_ds_kw == "checkerboard":
+    if base_ds_kw.startswith("checkerboard"):
         base_ds = Checkerboard_Dataset(
             num_rows=4,
             dataset_size=50000
@@ -185,7 +185,7 @@ def main():
         batch_size=batch_size,
         shuffle=True,
     )
-    if base_ds_kw == "checkerboard":
+    if base_ds_kw.startswith("checkerboard"):
         val_base_ds = Checkerboard_Dataset(
             num_rows=4,
             dataset_size=4096
