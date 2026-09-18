@@ -255,7 +255,10 @@ class EX_RGVFMMLP(RGVFMMLP):
             with_residual_position=with_residual_position,
             **kwargs,
         )
-        self.project_to_manifold = project_to_manifold
+        self.register_buffer(
+            "project_to_manifold",
+            torch.tensor(project_to_manifold, dtype=torch.bool),
+        )
 
     def _format_output(self, raw_output: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
         del x_t

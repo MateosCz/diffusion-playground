@@ -44,6 +44,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         intrinsic_prior_std: float = 1.0,
         ambient_prior_scale: float = 1.0,
         is_loss_weighted: bool = True,
+        ambient_metric: Literal["euclidean", "geodesic"] = "euclidean",
         integrator: str | BaseODEIntegrator = "euler",
     ) -> None:
         super().__init__(
@@ -83,6 +84,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         self.intrinsic_prior_std = float(intrinsic_prior_std)
         self.ambient_prior_scale = float(ambient_prior_scale)
         self.is_loss_weighted = is_loss_weighted
+        self.ambient_metric = ambient_metric
     @property
     def model_dim(self) -> int:
         """Feature dimension seen by the ``x_T``-predicting model."""
@@ -134,7 +136,12 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
                 f"got {prediction.shape} and {target.shape}"
             )
         if self.support == "extrinsic":
-            distance = self.manifold.ambient_distance(prediction, target) # geodesic distance after projecting the ambient space to the manifold
+            if self.ambient_metric == "euclidean":
+                distance = torch.linalg.vector_norm(prediction - target, dim=-1)
+            elif self.ambient_metric == "geodesic":
+                distance = self.manifold.ambient_distance(prediction, target) # geodesic distance after projecting the ambient space to the manifold
+            else:
+                raise ValueError(f"ambient_metric must be 'euclidean' or 'geodesic', got {self.ambient_metric!r}")
         else:
             distance = self.manifold.distance(target, prediction) # geodesic distance in the manifold
         if t is None:
