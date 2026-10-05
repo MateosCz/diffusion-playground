@@ -119,7 +119,6 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         prediction: torch.Tensor,
         target: torch.Tensor,
         *,
-        x_t: Optional[torch.Tensor] = None,
         t: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Time-weighted squared geodesic distance to the target ``x_T``.
@@ -129,7 +128,6 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         and normalized to have batch mean one with ``normalize_loss_weights``.
         Omitting ``t`` is equivalent to evaluating the objective at ``t=0``.
         """
-        del x_t
         if prediction.shape != target.shape:
             raise ValueError(
                 "prediction and target must have the same shape, "
@@ -425,6 +423,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         endpoint: torch.Tensor,
     ) -> torch.Tensor:
         return self.x_T_to_vector_field(t, x_t, endpoint)
+
 
     endpoint_to_velocity = endpoint_to_vector_field
 

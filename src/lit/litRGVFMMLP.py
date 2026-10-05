@@ -88,7 +88,6 @@ class LitRGVFMMLP(L.LightningModule):
         loss = self.rg_vfm.loss(
             pred_x_T,
             target_x_T,
-            x_t=x_t,
             t=t,
         )
 
@@ -98,7 +97,6 @@ class LitRGVFMMLP(L.LightningModule):
         identity_loss = self.rg_vfm.loss(
             x_t,
             target_x_T,
-            x_t=x_t,
             t=t,
         )
         if self.rg_vfm.support == "extrinsic":

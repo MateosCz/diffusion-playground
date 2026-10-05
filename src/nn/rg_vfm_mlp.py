@@ -31,11 +31,11 @@ class RGVFMMLP(nn.Module):
         total_time: float = 1.0,
         time_embedding_scale: float = 1.0,
         position_fourier_bands: int = 1,
-        position_period: float | Sequence[float] | torch.Tensor = 2 * torch.pi,
         with_sincos_position: bool = True,
         with_residual_position: bool = False,
         manifold: BaseManifold = None,
         residual_position_scale: float = 0.1,
+        time_input_dim: int = 1,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -80,30 +80,19 @@ class RGVFMMLP(nn.Module):
         self.x_lifting_dim = x_lifting_dim
         self.time_embedding_half_dim = time_embedding_half_dim
         self.time_embedding_dim = 2 * time_embedding_half_dim
+        self.time_input_dim = time_input_dim
         self.total_time = float(total_time)
         self.time_embedding_scale = float(time_embedding_scale)
         self.position_fourier_bands = position_fourier_bands
         self.with_sincos_position = with_sincos_position
         # self.with_residual_position = with_residual_position
         self.manifold = manifold
-        position_period_tensor = torch.as_tensor(
-            position_period,
-            dtype=torch.float32,
-        )
-        if position_period_tensor.ndim == 0:
-            position_period_tensor = position_period_tensor.repeat(dim)
-        if position_period_tensor.shape != (dim,):
-            raise ValueError(
-                "position_period must be a scalar or have shape "
-                f"({dim},), got {tuple(position_period_tensor.shape)}"
-            )
-        if not torch.isfinite(position_period_tensor).all():
-            raise ValueError("position_period must contain only finite values")
-        if torch.any(position_period_tensor <= 0):
-            raise ValueError("position_period must contain only positive values")
+        # Retain the old checkpoint key; forward reads the manifold's period.
         self.register_buffer(
             "position_period",
-            position_period_tensor.clone(),
+            torch.as_tensor(
+                getattr(manifold, "period", 1.0), dtype=torch.float32
+            ).expand(dim).clone(),
         )
         self.register_buffer(
             "residual_position_scale",
@@ -133,7 +122,7 @@ class RGVFMMLP(nn.Module):
             nn.Linear(x_lifting_dim, x_lifting_dim),
         )
         self.lifting_layer_t = nn.Sequential(
-            nn.Linear(self.time_embedding_dim, self.time_embedding_dim),
+            nn.Linear(self.time_embedding_dim * self.time_input_dim, self.time_embedding_dim),
             nn.SiLU(),
             nn.Linear(self.time_embedding_dim, self.time_embedding_dim),
         )
@@ -159,18 +148,17 @@ class RGVFMMLP(nn.Module):
             raise ValueError(
                 f"x_t must have shape (batch, {self.dim}), got {tuple(x_t.shape)}"
             )
-        x_t_identity = x_t # residual position
         if t.ndim == 1:
             t = t.unsqueeze(-1)
-        if t.shape != (x_t.shape[0], 1):
+        expected = (x_t.shape[0], self.time_input_dim)
+        if t.shape != expected:
             raise ValueError(
-                f"t must have shape ({x_t.shape[0]}, 1), got {tuple(t.shape)}"
+                f"t must have shape {expected}, got {tuple(t.shape)}"
             )
 
         if self.with_sincos_position:
             frequencies = self.position_frequencies.to(dtype=x_t.dtype)
-            period = self.position_period.to(dtype=x_t.dtype)
-            normalized_x = x_t / period
+            normalized_x = x_t / self.manifold.period
             x_frequencies = (
                 2 * torch.pi * normalized_x.unsqueeze(-1) * frequencies
             )
@@ -186,9 +174,12 @@ class RGVFMMLP(nn.Module):
 
         normalized_t = t / self.total_time
         t_embedding = Block.sinusoidal_time_embedding(
-            normalized_t * self.time_embedding_scale,
+            (normalized_t * self.time_embedding_scale).reshape(-1, 1),
             self.time_embedding_half_dim,
-        ).to(dtype=x_t.dtype)
+        ).reshape(
+            x_t.shape[0], self.time_input_dim * self.time_embedding_dim
+        ).to(dtype=x_t.dtype) # first flatten to (2B,1) for sincos embedding,
+        #then reshape back to (B,2*self.time_embedding_dim) for the input of network
         h_t = self.lifting_layer_t(t_embedding)
         h_x = self.lifting_layer_x(x_embedding)
 
@@ -199,10 +190,7 @@ class RGVFMMLP(nn.Module):
             hidden = self.activation(hidden)
         hidden = self.output_layer(hidden)
         if self.with_residual_position:
-            hidden = hidden * self.residual_position_scale
-            hidden = hidden + x_t_identity
-        else:
-            hidden = hidden
+            hidden = x_t + self.residual_position_scale * hidden
         return self._format_output(hidden, x_t)
 
     def _format_output(

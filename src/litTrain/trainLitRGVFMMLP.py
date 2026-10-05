@@ -136,7 +136,6 @@ def build_model(manifold: FlatTorus01 | None = None) -> RGVFMMLP:
     model_class = EX_RGVFMMLP if rg_vfm_kwargs["support"] == "extrinsic" else RGVFMMLP
     return model_class(
         **build_nn_kwargs(manifold),
-        position_period=manifold.period,
         manifold=manifold,
     )
 

@@ -115,7 +115,6 @@ def build_model(manifold: FlatTorus01 | None = None) -> RFMMLP:
     manifold = manifold or build_manifold()
     return RFMMLP(
         **nn_kwargs,
-        position_period=manifold.period,
         manifold=manifold,
     )
 
