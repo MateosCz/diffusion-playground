@@ -1,4 +1,4 @@
-"""Train a periodic velocity-predicting RFM MLP on 2D torus data."""
+"""Train a periodic velocity-predicting RFM MLP on 1D or 2D torus data."""
 
 from datetime import datetime
 
@@ -23,13 +23,19 @@ from src.nn.rfm_mlp import RFMMLP
 # Config
 # ---------------------------------------------------------------------------
 total_time = 1.0
-dim = 2
+dim = 1  # Use 2 for the 2D checkerboard or pacman.
 n_epoch = 2_000
 lr = 1e-4
 batch_size = 512
-num_workers = 0
+num_workers = 6
+num_rows = 4
 
-dataset_name = "pacman"  # Any name starting with "checkerboard", or "pacman"
+dataset_name = "checkerboard"  # "checkerboard" or "pacman"
+if dim == 2 and dataset_name == "checkerboard":
+    dataset_name = f"checkerboard_{num_rows}x{num_rows}"
+elif dim == 1 and dataset_name == "checkerboard":
+    dataset_name = f"checkerboard_{num_rows}"
+
 pacman_path = "data/pacman.npy"
 train_size = 40_000
 val_size = 4_096
@@ -42,7 +48,7 @@ flow_kwargs = {
 
 rfm_kwargs = {
     "total_time": total_time,
-    "time_eps": 1e-5,
+    "time_eps": 1e-3,
     "normalize_loss": False,
     "integrator": "euler",
 }
@@ -56,6 +62,8 @@ nn_kwargs = {
     "total_time": total_time,
     "time_embedding_scale": 1.0,
     "position_fourier_bands": 8,
+    # RFM predicts velocity, so do not add the input position to its output.
+    "with_residual_position": False,
     "with_sincos_position": True,
 }
 
@@ -68,7 +76,7 @@ def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
     """Create fractional-coordinate data directly in ``[0, 1)``."""
     if name.startswith("checkerboard"):
         return Checkerboard_Dataset(
-            num_rows=4,
+            num_rows=num_rows,
             dataset_size=size,
             seed=seed,
             dim=dim,
@@ -94,8 +102,8 @@ def build_loaders() -> tuple[DataLoader, DataLoader]:
         "pin_memory": torch.cuda.is_available(),
     }
     return (
-        DataLoader(train_dataset, shuffle=True, **common_kwargs),
-        DataLoader(val_dataset, shuffle=False, **common_kwargs),
+        DataLoader(train_dataset, shuffle=True, drop_last=True, **common_kwargs),
+        DataLoader(val_dataset, shuffle=False, drop_last=True, **common_kwargs),
     )
 
 
@@ -123,16 +131,23 @@ def main() -> None:
     train_loader, val_loader = build_loaders()
     manifold = build_manifold()
 
+    position_coding_flag = "sincos" if nn_kwargs["with_sincos_position"] else "raw"
+    experiment_name = (
+        f"RFMMLP_{dataset_name}_fractional_"
+        f"{position_coding_flag}_no_res"
+    )
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     lit_model = LitRFMMLP(
         model=build_model(manifold),
         rfm=build_rfm(manifold),
         flow_kwargs=flow_kwargs,
+        rfm_kwargs=rfm_kwargs,
+        nn_kwargs=nn_kwargs,
+        experiment_name_timestamp=f"{experiment_name}_{timestamp}",
         batch_size=batch_size,
         lr=lr,
     )
 
-    experiment_name = f"RFMMLP_{dataset_name}_fractional"
-    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
@@ -141,7 +156,7 @@ def main() -> None:
     )
     loss_checkpoint = ModelCheckpoint(
         dirpath=checkpoint_dir,
-        filename="rfm_mlp_loss_{epoch:04d}-{val_loss:.6f}",
+        filename="rfm_mlp_{epoch:04d}-{val_loss:.6f}",
         monitor="val_loss",
         mode="min",
         save_top_k=1,
@@ -156,6 +171,8 @@ def main() -> None:
         callbacks.extend(
             [
                 CheckerboardGenerationMetrics(
+                    num_rows=num_rows,
+                    bins=4 * num_rows,
                     n_samples=generation_eval_samples,
                     n_steps=generation_eval_steps,
                     every_n_epochs=generation_eval_every_n_epochs,

@@ -45,7 +45,9 @@ class ExtrinsicMLPTests(unittest.TestCase):
     def test_training_config_selects_representation(self):
         manifold = FlatTorus01(dim=2)
         for support in ("intrinsic", "extrinsic"):
-            with patch.dict(training.rg_vfm_kwargs, support=support), patch.dict(training.nn_kwargs, WIDTHS):
+            with (patch.dict(training.rg_vfm_kwargs, support=support),
+                  patch.dict(training.nn_kwargs, WIDTHS, dim=2, output_dim=2),
+                  patch.dict(training.extrinsic_nn_kwargs, with_residual_position=False)):
                 model = training.build_model(manifold)
                 self.assertEqual(model.dim, 4 if support == "extrinsic" else 2)
                 if support == "extrinsic":
@@ -60,6 +62,21 @@ class ExtrinsicMLPTests(unittest.TestCase):
         restored = build_model_from_checkpoint(checkpoint, method="rgvfm", manifold=model.manifold)
         t, x = torch.rand(8, 1), torch.rand(8, 2)
         torch.testing.assert_close(model(t, x), restored(t, x))
+
+    def test_legacy_extrinsic_projection_round_trip(self):
+        manifold = FlatTorus01(dim=2)
+        for projected in (True, False):
+            with self.subTest(projected=projected):
+                model = EX_RGVFMMLP(manifold, **WIDTHS, project_to_manifold=projected)
+                state = {f"model.{k}": v for k, v in model.state_dict().items()
+                         if k != "project_to_manifold"}
+                # The oldest checkpoints omitted the flag; projection was always on.
+                saved_nn = {} if projected else {"project_to_manifold": False}
+                checkpoint = {"state_dict": state, "hyper_parameters": {"nn_kwargs": saved_nn}}
+                restored = build_model_from_checkpoint(checkpoint, method="rgvfm", manifold=manifold)
+                self.assertEqual(bool(restored.project_to_manifold), projected)
+                t, x = torch.rand(8, 1), torch.randn(8, 4)
+                torch.testing.assert_close(model(t, x), restored(t, x))
 
     def test_lightning_training_callback_and_saved_generation(self):
         manifold = FlatTorus01(dim=2)

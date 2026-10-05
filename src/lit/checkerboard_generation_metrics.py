@@ -1,4 +1,4 @@
-"""Distribution-level validation for generated 2D checkerboard samples."""
+"""Distribution-level validation for generated 1D or 2D checkerboard samples."""
 
 import lightning as L
 import torch
@@ -10,9 +10,9 @@ def checkerboard_distribution_metrics(
     num_rows: int = 4,
     bins: int = 16,
 ) -> dict[str, torch.Tensor]:
-    """Return valid-tile rate and histogram TV for points in ``[0, 1)^2``."""
-    if points.ndim != 2 or points.shape[-1] != 2:
-        raise ValueError(f"points must have shape (batch, 2), got {points.shape}")
+    """Return valid-tile rate and histogram TV for 1D or 2D points."""
+    if points.ndim != 2 or points.shape[-1] not in (1, 2):
+        raise ValueError(f"points must have shape (batch, 1) or (batch, 2), got {points.shape}") # (batch, 1) or (batch, 2) is the shape of the checkerboard dataset 1D or 2D
     if num_rows < 1:
         raise ValueError("num_rows must be positive")
     if bins < 1 or bins % num_rows != 0:
@@ -21,19 +21,25 @@ def checkerboard_distribution_metrics(
     wrapped = torch.remainder(points, 1.0)
     tile = torch.floor(wrapped * num_rows).long().clamp(0, num_rows - 1)
     valid_tile_rate = (
-        (tile[:, 0] + tile[:, 1]).remainder(2) == 0
+        tile.sum(dim=-1).remainder(2) == 0 # sum of the tile indices is even
     ).to(points.dtype).mean()
 
     bin_index = torch.floor(wrapped * bins).long().clamp(0, bins - 1)
-    flat_index = bin_index[:, 0] * bins + bin_index[:, 1]
-    observed = torch.bincount(flat_index, minlength=bins * bins).to(points.dtype)
+    if points.shape[-1] == 1: # 1D checkerboard case
+        flat_index = bin_index[:, 0]
+    else: # 2D checkerboard case
+        flat_index = bin_index[:, 0] * bins + bin_index[:, 1]
+    observed = torch.bincount(flat_index, minlength=bins ** points.shape[-1]).to(points.dtype)
     observed = observed / observed.sum().clamp_min(1)
 
     one_dimensional_bins = torch.arange(bins, device=points.device)
     tile_index = one_dimensional_bins // (bins // num_rows)
-    valid_bins = (
-        tile_index[:, None] + tile_index[None, :]
-    ).remainder(2) == 0
+    if points.shape[-1] == 1: # 1D checkerboard case
+        valid_bins = tile_index.remainder(2) == 0
+    else: # 2D checkerboard case
+        valid_bins = (
+            tile_index[:, None] + tile_index[None, :]
+        ).remainder(2) == 0
     target = valid_bins.flatten().to(points.dtype)
     target = target / target.sum()
     histogram_tv = 0.5 * torch.abs(observed - target).sum()

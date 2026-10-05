@@ -1,4 +1,4 @@
-"""Train ``RGVFMMLP`` on 2D fractional-coordinate torus data."""
+"""Train ``RGVFMMLP`` on 1D or 2D fractional-coordinate torus data."""
 
 from datetime import datetime
 
@@ -26,12 +26,12 @@ from src.nn.rg_vfm_mlp import EX_RGVFMMLP, RGVFMMLP
 # Config
 # ---------------------------------------------------------------------------
 total_time = 1.0
-dim = 1
-n_epoch = 2_000
+dim = 1  # Use 2 for the 2D checkerboard or pacman.
+n_epoch = 200
 lr = 1e-4
 batch_size = 512
 num_workers = 6
-num_rows = 4
+num_rows = 8
 
 dataset_name = "checkerboard"  # "checkerboard" or "pacman"
 if dim == 2 and dataset_name == "checkerboard":
@@ -54,7 +54,7 @@ rg_vfm_kwargs = {
     "time_eps": 1e-3,
     "noise_scale": 0.0,
     "max_velocity_scale": None,
-    "max_loss_weight": 20.0,
+    "max_loss_weight": 100.0,
     "normalize_loss_weights": False, # True or False
     "normalize_loss": False,
     "support": "extrinsic",  # "intrinsic" or "extrinsic"
@@ -62,6 +62,7 @@ rg_vfm_kwargs = {
     "integrator": "euler",
     "is_loss_weighted": True,
     "ambient_metric": "euclidean",
+    # "ambient_metric": "geodesic",
 }
 
 nn_kwargs = {
@@ -85,7 +86,8 @@ generation_eval_steps = 100
 
 # Extrinsic geometry and dimensions are selected automatically. Override
 # residual prediction here independently of the intrinsic configuration.
-extrinsic_nn_kwargs = {"with_residual_position": False, "with_sincos_position": False, "project_to_manifold": False}
+# Ambient coordinates are Cartesian, so keep their raw values.
+extrinsic_nn_kwargs = {"with_residual_position": False, "with_sincos_position": False, "project_to_manifold": True}
 
 
 def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
@@ -143,8 +145,10 @@ def build_nn_kwargs(manifold: FlatTorus01) -> dict:
     kwargs = dict(nn_kwargs)
     if rg_vfm_kwargs["support"] == "extrinsic":
         kwargs.update(extrinsic_nn_kwargs)
-        kwargs.update(dim=manifold.ambient_dim, output_dim=manifold.ambient_dim,
-                      with_sincos_position=False)
+        kwargs.update(
+            dim=manifold.ambient_dim,
+            output_dim=manifold.ambient_dim,
+            )
     return kwargs
 
 
@@ -165,8 +169,10 @@ def main() -> None:
     normalize_loss_weights_flag = 'normalized_loss_weight' if rg_vfm_kwargs['normalize_loss_weights'] else 'unnormalized_loss_weight'
     loss_weighted_flag = normalize_loss_weights_flag if rg_vfm_kwargs['is_loss_weighted'] else 'unweighted_loss'
     position_coding_flag = 'sincos' if model_kwargs['with_sincos_position'] else 'raw'
-    ambient_distance_loss_flag = 'euclidean_loss' if rg_vfm_kwargs['ambient_metric'] == 'euclidean' and model_kwargs['project_to_manifold'] else 'geodesic_loss'
-    ambient_distance_loss_flag = ambient_distance_loss_flag if rg_vfm_kwargs['support'] == 'extrinsic' else ''
+    ambient_distance_loss_flag = (
+        f"{rg_vfm_kwargs['ambient_metric']}_loss"
+        if rg_vfm_kwargs['support'] == 'extrinsic' else ''
+    )
     experiment_name = f"RGVFMMLP_{dataset_name}_fractional_{rg_vfm_kwargs['support']}_{position_coding_flag}_{'no_res' if not model_kwargs['with_residual_position'] else 'res_scale_' + str(model_kwargs['residual_position_scale'])}_{loss_weighted_flag}_{ambient_distance_loss_flag}"
     checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     lit_model = LitRGVFMMLP(
@@ -202,6 +208,8 @@ def main() -> None:
         callbacks.extend(
             [
                 CheckerboardGenerationMetrics(
+                    num_rows=num_rows,
+                    bins=4 * num_rows,
                     n_samples=generation_eval_samples,
                     n_steps=generation_eval_steps,
                     every_n_epochs=generation_eval_every_n_epochs,

@@ -42,8 +42,9 @@ RFM models predict velocity directly. RG-VFM models predict the terminal state
 ``x_T``, which the method converts to a velocity at the current state ``x_t``
 before ODE integration.
 
-For the 2D flat-torus checkerboard, the velocity-regression experiment can be
-started with:
+The training entry points default to the 1D checkerboard (`dim = 1`). Set
+`dim = 2` in the training script for the 2D checkerboard. Start the
+velocity-regression experiment with:
 
 ```bash
 python -m src.litTrain.trainLitRFMMLP
@@ -56,8 +57,9 @@ baseline; RFM logs its gain over the zero-velocity baseline. These diagnostics
 should be used alongside regression loss because either loss contains a large
 irreducible component that need not correlate with sample quality.
 
-Evaluate the best distribution-selected checkpoint without relying on a
-hard-coded notebook architecture:
+For 1D, the last section of `flat_torus_1d.ipynb` loads an explicit checkpoint
+and plots learned trajectories in `(time, sin(2πx), cos(2πx))`.
+For 2D, evaluate the best distribution-selected checkpoint with:
 
 ```bash
 python -m src.litTrain.evalFlatTorus2D --method rfm
@@ -87,12 +89,12 @@ intrinsic_sample = flow.to_intrinsic(ambient_sample)  # shape: (batch, 2)
 ```
 
 In `src/litTrain/trainLitRGVFMMLP.py`, `rg_vfm_kwargs["support"]` selects
-the intrinsic or extrinsic MLP automatically. Keep the dataset dimension at
-2; ambient network dimensions are inferred. `extrinsic_nn_kwargs` controls
+the intrinsic or extrinsic MLP automatically. Set the dataset dimension to
+1 or 2; ambient network dimensions are inferred. `extrinsic_nn_kwargs` controls
 the optional residual experiment independently of intrinsic settings.
 Run training with `python -m src.litTrain.trainLitRGVFMMLP`.
 The checkerboard callback decodes generated samples before evaluation.
-`LitRGVFMMLP.sample()` continues to return model-space samples (4D for
+`LitRGVFMMLP.sample()` continues to return model-space samples (`2 * dim` for
 extrinsic); use `lit_model.rg_vfm.to_intrinsic(samples)` for plotting.
 Evaluate a saved checkpoint with
 `python -m src.litTrain.evalFlatTorus2D --method rgvfm --checkpoint PATH`.

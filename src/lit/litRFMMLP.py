@@ -24,6 +24,10 @@ class LitRFMMLP(L.LightningModule):
         flow_kwargs: dict[str, Any],
         batch_size: int,
         lr: float = 1e-3,
+        *,
+        rfm_kwargs: dict[str, Any] | None = None,
+        nn_kwargs: dict[str, Any] | None = None,
+        experiment_name_timestamp: str | None = None,
     ) -> None:
         super().__init__()
         if batch_size < 1:
@@ -31,8 +35,12 @@ class LitRFMMLP(L.LightningModule):
         if lr <= 0:
             raise ValueError(f"lr must be positive, got {lr}")
 
+        rfm_kwargs = dict(rfm_kwargs or {})
+        nn_kwargs = dict(nn_kwargs or {})
         self.model = model
         self.rfm = rfm
+        self.rfm_kwargs = rfm_kwargs
+        self.nn_kwargs = nn_kwargs
         self.flow_kwargs = dict(flow_kwargs)
         self.batch_size = batch_size
         self.lr = lr

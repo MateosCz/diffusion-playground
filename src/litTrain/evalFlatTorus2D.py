@@ -29,11 +29,11 @@ def _checkpoint_metric(path: Path) -> float:
 def find_checkpoint(project_root: Path, method: Method) -> Path:
     """Prefer the best distribution-selected checkpoint when available."""
     experiment = (
-        "RFMMLP_checkerboard_fractional"
+        "RFMMLP_checkerboard"
         if method == "rfm"
-        else "RGVFMMLP_checkerboard_fractional"
+        else "RGVFMMLP_checkerboard"
     )
-    roots = list((project_root / "checkpoints").glob(f"*/{experiment}*"))
+    roots = list((project_root / "checkpoints").glob(f"*/{experiment}*_fractional*"))
     distribution = [
         path
         for root in roots
@@ -93,25 +93,45 @@ def build_model_from_checkpoint(
     model_class = RFMMLP if method == "rfm" else RGVFMMLP
     if extrinsic:
         model_class = EX_RGVFMMLP
-    model = model_class(
-        dim=model_dim,
-        x_lifting_dim=x_lifting_dim,
-        time_embedding_half_dim=time_embedding_dim // 2,
-        hidden_dim=hidden_dim,
-        output_dim=state["output_layer.weight"].shape[0],
-        total_time=saved_nn.get("total_time", 1.0),
-        time_embedding_scale=saved_nn.get("time_embedding_scale", 1.0),
-        position_fourier_bands=position_fourier_bands,
-        position_period=manifold.period,
-        with_sincos_position=with_sincos_position,
-        with_residual_position=saved_nn.get("with_residual_position", False),
-        residual_position_scale=saved_nn.get("residual_position_scale", 0.1),
-        manifold=manifold,
-    )
+        model = model_class(
+            dim=model_dim,
+            x_lifting_dim=x_lifting_dim,
+            time_embedding_half_dim=time_embedding_dim // 2,
+            hidden_dim=hidden_dim,
+            output_dim=state["output_layer.weight"].shape[0],
+            total_time=saved_nn.get("total_time", 1.0),
+            time_embedding_scale=saved_nn.get("time_embedding_scale", 1.0),
+            position_fourier_bands=position_fourier_bands,
+            position_period=manifold.period,
+            with_sincos_position=with_sincos_position,
+            with_residual_position=saved_nn.get("with_residual_position", False),
+            residual_position_scale=saved_nn.get("residual_position_scale", 0.1),
+            manifold=manifold,
+            project_to_manifold=saved_nn.get("project_to_manifold", True),
+        )
+    else:
+        model = model_class(
+            dim=model_dim,
+            x_lifting_dim=x_lifting_dim,
+            time_embedding_half_dim=time_embedding_dim // 2,
+            hidden_dim=hidden_dim,
+            output_dim=state["output_layer.weight"].shape[0],
+            total_time=saved_nn.get("total_time", 1.0),
+            time_embedding_scale=saved_nn.get("time_embedding_scale", 1.0),
+            position_fourier_bands=position_fourier_bands,
+            position_period=manifold.period,
+            with_sincos_position=with_sincos_position,
+            with_residual_position=saved_nn.get("with_residual_position", False),
+            residual_position_scale=saved_nn.get("residual_position_scale", 0.1),
+            manifold=manifold,
+        )
     # Older checkpoints predate these buffers; use saved configuration when
     # available, otherwise retain the historical evaluation defaults.
     for key in ("with_residual_position", "residual_position_scale"):
         state.setdefault(key, model.state_dict()[key])
+    if extrinsic:
+        # Legacy models projected by default; later checkpoints saved an override.
+        state.setdefault("project_to_manifold", model.state_dict()["project_to_manifold"])
     model.load_state_dict(state, strict=True)
     return model
 
@@ -138,11 +158,10 @@ def evaluate_checkpoint(
     model.eval()
 
     if method == "rfm":
-        flow = RFM(
-            manifold,
-            normalize_loss=False,
-            integrator="euler",
-        )
+        flow_kwargs = dict(checkpoint.get("hyper_parameters", {}).get("rfm_kwargs", {}))
+        flow_kwargs.setdefault("normalize_loss", False)
+        flow_kwargs.setdefault("integrator", "euler")
+        flow = RFM(manifold, **flow_kwargs)
     else:
         flow_kwargs = dict(checkpoint.get("hyper_parameters", {}).get("rg_vfm_kwargs", {}))
         flow_kwargs.setdefault("max_velocity_scale", 20.0)

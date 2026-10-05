@@ -236,14 +236,15 @@ class EX_RGVFMMLP(RGVFMMLP):
         hidden_dim: Sequence[int] | int,
         with_residual_position: bool = False,
         project_to_manifold: bool = True,
+        with_sincos_position: bool = False,
         **kwargs,
     ) -> None:
         for name in ("dim", "output_dim"):
             value = kwargs.pop(name, manifold.ambient_dim)
             if value != manifold.ambient_dim:
                 raise ValueError(f"{name} must equal ambient_dim={manifold.ambient_dim}")
-        if kwargs.pop("with_sincos_position", False):
-            raise ValueError("EX_RGVFMMLP requires raw ambient coordinates")
+        # if kwargs.pop("with_sincos_position", False):
+        #     raise ValueError("EX_RGVFMMLP requires raw ambient coordinates")
         super().__init__(
             dim=manifold.ambient_dim,
             output_dim=manifold.ambient_dim,
@@ -251,7 +252,7 @@ class EX_RGVFMMLP(RGVFMMLP):
             x_lifting_dim=x_lifting_dim,
             time_embedding_half_dim=time_embedding_half_dim,
             hidden_dim=hidden_dim,
-            with_sincos_position=False,
+            with_sincos_position=with_sincos_position,
             with_residual_position=with_residual_position,
             **kwargs,
         )
