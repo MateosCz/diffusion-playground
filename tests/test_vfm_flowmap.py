@@ -60,6 +60,26 @@ class VFMFlowMapTests(unittest.TestCase):
         loss.backward()
         torch.testing.assert_close(pi.theta.grad, expected_gradient)
 
+    def test_lagrange_loss_matches_under_no_grad_without_updating_parameters(self):
+        flow = make_flow()
+        pi = TimeDependentEndpoint()
+        x = torch.tensor([[0.2, 0.3], [0.7, -0.4], [1.2, 0.1]], dtype=torch.float64)
+        s = torch.tensor([[0.1], [0.4], [0.8]], dtype=x.dtype)
+        t = torch.tensor([[0.6], [1.1], [1.5]], dtype=x.dtype)
+        initial_parameters = [parameter.detach().clone() for parameter in pi.parameters()]
+
+        training_loss = flow.lagrange_loss(x, s, t, pi)
+        # Lightning with inference_mode=False evaluates validation in no_grad.
+        with torch.no_grad():
+            validation_loss = flow.lagrange_loss(x, s, t, pi)
+
+        torch.testing.assert_close(validation_loss, training_loss.detach())
+        self.assertTrue(training_loss.requires_grad)
+        self.assertFalse(validation_loss.requires_grad)
+        for parameter, initial in zip(pi.parameters(), initial_parameters):
+            self.assertIsNone(parameter.grad)
+            torch.testing.assert_close(parameter.detach(), initial, rtol=0, atol=0)
+
     def test_constant_endpoint_has_zero_loss_including_diagonal(self):
         flow = make_flow()
         x = torch.tensor([[0.2, 0.4], [0.7, 0.9], [0.6, 0.1]], dtype=torch.float64)

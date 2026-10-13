@@ -64,3 +64,5 @@ class VFMFlowMap:
         for s, t in zip(time_steps[:-1], time_steps[1:]):
             x = self.Xst(x, s, t, pi)
         return x
+
+__all__ = ["VFMFlowMap"]
