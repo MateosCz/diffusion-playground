@@ -1,40 +1,40 @@
 from src.flow_matching.rg_vfm import RGVFM
+from src.flow_matching.vfm import VFM
 import torch
-import numpy as np
 import torch.nn as nn
 
 
 class VFMFlowMap:
-    """
-    Now only implement the extrinsic version.
-    """
-    def __init__(self, rg_vfm: RGVFM):
+    """Affine endpoint flow map for Euclidean or ambient-space states."""
+
+    def __init__(self, rg_vfm: RGVFM | VFM):
+        self.vfm = rg_vfm
+        # Keep existing fractional-coordinate callers working.
         self.rg_vfm = rg_vfm
 
     def Xst(self, x_s, s, t, pi: nn.Module):
         """Affine flow map: x_s + (t-s) * (pi_s,t(x_s) - x_s) / (T-s)."""
-        s = self.rg_vfm.batch_time(s, x_s)
-        t = self.rg_vfm.batch_time(t, x_s)
+        s = self.vfm.batch_time(s, x_s)
+        t = self.vfm.batch_time(t, x_s)
         if torch.any(t < s):
             raise ValueError("t must be greater than or equal to s")
 
 
-        return x_s + (t - s) * (pi(x_s, s, t) - x_s) / (self.rg_vfm.total_time - s)
+        return x_s + (t - s) * (pi(x_s, s, t) - x_s) / (self.vfm.total_time - s)
 
     def tangent_loss(self,x1, xt, t, pi: nn.Module):
         """tangent loss for the flow map
         E[||(pi_t,t(x_t) - x_1)/(1-t)||^2]
         """
-        return self.rg_vfm.loss(pi(xt, t, t), x1, t=t)
+        return self.vfm.loss(pi(xt, t, t), x1, t=t)
     
     def lagrange_loss(self, xs, s, t, pi: nn.Module):
+        """Match (T-t) * dX_st/dt to stop_grad(pi_tt(X_st)) - X_st.
+
+        Stop-gradient applies only to pi_tt; X_st remains differentiable.
         """
-        velocity parameterization:E[||partial\_t X\_s,t(x\_s) - v\_t,t(X\_s,t(x\_s))||^2]  = 
-        endpoint parameterization:E[||partial_t X_s,t(x_s) - (sg(pi_t,t(X_s,t(x_s))) - X_s,t(x_s))/(1-t)||^2]
-        Stop-gradient applies only to pi_t,t; X_s,t remains differentiable.
-        """
-        s = self.rg_vfm.batch_time(s, xs)
-        t = self.rg_vfm.batch_time(t, xs)
+        s = self.vfm.batch_time(s, xs)
+        t = self.vfm.batch_time(t, xs)
 
         x_st, dx_dt = torch.autograd.functional.jvp(
             lambda target_t: self.Xst(xs, s, target_t, pi),
@@ -43,7 +43,7 @@ class VFMFlowMap:
             create_graph=True,
         )
         v_tt_fake = (pi(x_st, t, t).detach() - x_st)
-        return (dx_dt * (self.rg_vfm.total_time - t) - v_tt_fake).square().sum(dim=-1).mean()
+        return (dx_dt * (self.vfm.total_time - t) - v_tt_fake).square().sum(dim=-1).mean()
 
     @torch.inference_mode()
     def sample(self, pi: nn.Module, n_steps: int, num_samples: int):
@@ -53,11 +53,11 @@ class VFMFlowMap:
         """
         reference = next(pi.parameters())
         time_steps = torch.linspace(
-            0, self.rg_vfm.total_time, n_steps + 1,
+            0, self.vfm.total_time, n_steps + 1,
             device=reference.device, dtype=reference.dtype,
         )
-        x = self.rg_vfm.sample_prior(
-            (num_samples, self.rg_vfm.model_dim),
+        x = self.vfm.sample_prior(
+            (num_samples, self.vfm.model_dim),
             device=reference.device,
             dtype=reference.dtype,
         )

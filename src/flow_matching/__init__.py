@@ -3,6 +3,7 @@
 from .base import BaseFlowMatching
 from .rfm import RFM, RiemannianFlowMatching
 from .rg_vfm import RGVFM, RiemannianGaussianVariationalFlowMatching
+from .vfm import VFM
 
 __all__ = [
     "BaseFlowMatching",
@@ -10,4 +11,5 @@ __all__ = [
     "RiemannianFlowMatching",
     "RGVFM",
     "RiemannianGaussianVariationalFlowMatching",
+    "VFM",
 ]
