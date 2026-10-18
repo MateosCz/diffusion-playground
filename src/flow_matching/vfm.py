@@ -20,6 +20,7 @@ class VFM(nn.Module):
         dim: int,
         time_eps: float = 1e-5,
         prior_scale: float = 1.0,
+        max_loss_weight: float = 100.0,
         is_loss_weighted: bool = True,
     ) -> None:
         super().__init__()
@@ -33,6 +34,7 @@ class VFM(nn.Module):
         self.total_time = 1.0
         self.time_eps = float(time_eps)
         self.prior_scale = float(prior_scale)
+        self.max_loss_weight = float(max_loss_weight)
         self.is_loss_weighted = is_loss_weighted
 
     def sample_prior(
@@ -88,7 +90,11 @@ class VFM(nn.Module):
             raise ValueError("loss times must be in [0, 1)")
         errors = (prediction - target).square().sum(dim=-1)
         if self.is_loss_weighted:
-            errors = errors / (1 - times).square()
+            weight = 1.0/(1 - times).square()
+            if self.max_loss_weight is not None:
+                weight = weight.clamp_max(self.max_loss_weight)
+            errors = weight * errors
+            
         return errors.mean()
 
     def _validate_state(self, x: torch.Tensor, name: str) -> None:
