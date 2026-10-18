@@ -45,8 +45,9 @@ class LitCSPFlowMap(L.LightningModule):
             raise ValueError("batch must contain at least 2 crystals")
         n_diagonal = min(max(int(self.eta * batch.num_graphs), 1), batch.num_graphs - 1)
         graphs = batch.to_data_list()
-        diagonal = Batch.from_data_list(graphs[:n_diagonal])
-        off_diagonal = Batch.from_data_list(graphs[n_diagonal:])
+        # PyG may recreate batch/ptr on CPU when collating MPS tensors.
+        diagonal = Batch.from_data_list(graphs[:n_diagonal]).to(batch.x.device)
+        off_diagonal = Batch.from_data_list(graphs[n_diagonal:]).to(batch.x.device)
 
         t, graph_t, target = self.sample_training_pair(diagonal)
         tangent = self.flow_map.tangent_loss(target, graph_t, t, self.pi)

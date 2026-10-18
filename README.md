@@ -98,3 +98,55 @@ The checkerboard callback decodes generated samples before evaluation.
 extrinsic); use `lit_model.rg_vfm.to_intrinsic(samples)` for plotting.
 Evaluate a saved checkpoint with
 `python -m src.litTrain.evalFlatTorus2D --method rgvfm --checkpoint PATH`.
+
+## Joint CSP flow map
+
+`Endpoint_Flowmap_CSP` uses a fixed time interval `[0, 1]` and only implements
+`Xst`, `tangent_loss`, `lagrange_loss` and basic sampling from an initialized
+graph. `LitCSPFlowMap` handles training pairs, the diagonal/off-diagonal split,
+loss weights and prior initialization.
+
+```python
+import lightning as L
+from src.csp_model import Endpoint_Flowmap_CSP
+from src.flow_maps.vfm_flowmap import VFMFlowMap
+from src.flow_matching import RGVFM, VFM
+from src.lit.litCSPFlowMap import LitCSPFlowMap
+from src.manifolds import FlatTorus01
+from src.nn.ACSPVNet import Ambient_CSPVNet
+
+# Keep MP20 positions fractional; training pairs embed them directly into R^6.
+f_flow = RGVFM(FlatTorus01(dim=3), support="extrinsic")
+l_flow = VFM(dim=6)
+joint = Endpoint_Flowmap_CSP(VFMFlowMap(f_flow), VFMFlowMap(l_flow))
+pi = Ambient_CSPVNet(f_dim=f_flow.model_dim)
+model = LitCSPFlowMap(pi, joint, eta=0.5, lambda_f=1.0, lambda_l=1.0)
+
+# graph: fractional x/pos (N, 3) in [0, 1), l (B, 6), batch (N,), atom types and edges.
+# pi(graph, s, t) -> {"f": (N, 6), "l": (B, 6)} in model space.
+# Training batches need at least two crystals; s/t are graph-level (B, 1).
+trainer = L.Trainer(max_epochs=100)
+trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+generated = model.sample(graph)  # Default: one step from 0 to 1.
+coordinates = f_flow.to_intrinsic(generated.x)
+lattice = generated.l
+```
+
+Both losses return `{"f": loss_f, "l": loss_l}`. The default lattice uses
+a Gaussian prior and Euclidean endpoint loss weighted by `(1-t)^-2`.
+`VFM` in `src/flow_matching/vfm.py` implements this Euclidean branch:
+`l0 ~ Normal(0, I)`, `l_t = (1-t) * l0 + t * l1`. Lattices stay in the
+dataset's transformed six-dimensional parameter space without wrapping or
+manifold projection. The same `VFMFlowMap` supports both `VFM` and `RGVFM`;
+omitting `l_flowmap` selects `VFMFlowMap(VFM(dim=6))` automatically.
+Lagrangian loss differentiates both states together and detaches only the
+diagonal endpoint prediction. `ACSPVNet` accepts the graph and both times
+directly, with no velocity input. Its coordinate head predicts an unprojected
+endpoint using the local cosine/sine pair basis, preserving node permutation
+and periodic translation equivariance. The lattice prediction is invariant
+under those coordinate translations.
+
+Graph updates only replace `x`, `pos` and `l`; the predictor computes edge
+features from the current coordinates when needed. To split generated batches
+with `to_data_list()`, provide templates that already have per-graph `l`
+attributes (placeholder values are sufficient).
