@@ -4,7 +4,6 @@ import lightning as L
 import torch
 from torch_geometric.data import Batch
 
-from src.csp_model.state import update_graph
 
 
 class LitCSPFlowMap(L.LightningModule):
@@ -24,7 +23,7 @@ class LitCSPFlowMap(L.LightningModule):
         self.lambda_l = lambda_l
 
     def forward(self, graph, s, t):
-        """Predict both endpoints: (fractional coordinates, lattice)."""
+        """Return the coordinate and lattice endpoints under keys f/l."""
         return self.pi(graph, s, t)
 
     def sample_training_pair(self, graph1, graph0=None, *, t=None):
@@ -37,7 +36,7 @@ class LitCSPFlowMap(L.LightningModule):
         _, l_t, l1 = self.l_vfm.sample_training_pair(
             graph1.l, None if graph0 is None else graph0.l, t=t,
         )
-        return t, update_graph(graph1, f_t, l_t), update_graph(graph1, f1, l1)
+        return t, self.flow_map._update_graph(graph1, f_t, l_t), self.flow_map._update_graph(graph1, f1, l1)
 
     @torch.inference_mode(False)
     def _shared_step(self, batch, stage):
@@ -91,7 +90,7 @@ class LitCSPFlowMap(L.LightningModule):
             (batch.num_graphs, self.l_vfm.model_dim),
             device=f0.device, dtype=f0.dtype,
         )
-        graph0 = update_graph(batch, f0, l0)
+        graph0 = self.flow_map._update_graph(batch, f0, l0)
         return self.flow_map.sample(graph0, self.pi, n_steps=n_steps)
 
     def configure_optimizers(self):

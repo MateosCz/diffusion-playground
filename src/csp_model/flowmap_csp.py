@@ -7,7 +7,7 @@ from src.flow_matching.vfm import VFM
 
 
 class Endpoint_Flowmap_CSP:
-    """pi(graph, s, t) returns (f_endpoint, l_endpoint).
+    """pi(graph, s, t) returns {"f": f_endpoint, "l": l_endpoint}.
 
     graph is a PyG Batch in model space; s/t have shape (num_graphs, 1).
     Training pairs and prior initialization belong to LitCSPFlowMap.
@@ -24,7 +24,8 @@ class Endpoint_Flowmap_CSP:
 
     def Xst(self, graph, s, t, pi):
         """X_st = x_s + (t-s)/(1-s) * (pi_st(x_s)-x_s), for both modalities."""
-        pred_f, pred_l = pi(graph, s, t)
+        prediction = pi(graph, s, t)
+        pred_f, pred_l = prediction["f"], prediction["l"]
         alpha = (t - s) / (1 - s)
         f = graph.x + alpha[graph.batch] * (pred_f - graph.x)
         l = graph.l + alpha * (pred_l - graph.l)
@@ -32,7 +33,8 @@ class Endpoint_Flowmap_CSP:
 
     def tangent_loss(self, graph1, grapht, t, pi):
         """Return separate endpoint regression losses at s=t."""
-        pred_f, pred_l = pi(grapht, t, t)
+        prediction = pi(grapht, t, t)
+        pred_f, pred_l = prediction["f"], prediction["l"]
         loss_f = self.f_flowmap.vfm.loss(pred_f, graph1.x, t=t[grapht.batch])
         loss_l = self.l_flowmap.vfm.loss(pred_l, graph1.l, t=t)
         return {"f": loss_f, "l": loss_l}
@@ -46,7 +48,8 @@ class Endpoint_Flowmap_CSP:
         (f, l), (df_dt, dl_dt) = torch.autograd.functional.jvp(
             joint_state, (t,), (torch.ones_like(t),), create_graph=True,
         )
-        pred_f, pred_l = pi(self._update_graph(graph, f, l), t, t)
+        prediction = pi(self._update_graph(graph, f, l), t, t)
+        pred_f, pred_l = prediction["f"], prediction["l"]
         residual_f = (1 - t)[graph.batch] * df_dt - (pred_f.detach() - f)
         residual_l = (1 - t) * dl_dt - (pred_l.detach() - l)
         return {
