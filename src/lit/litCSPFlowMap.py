@@ -1,5 +1,7 @@
 """Joint CSP flow-map training, with one shared time per crystal."""
 
+import math
+
 import lightning as L
 import torch
 from torch_geometric.data import Batch
@@ -9,10 +11,13 @@ from torch_geometric.data import Batch
 class LitCSPFlowMap(L.LightningModule):
     def __init__(
         self, pi, flow_map, eta=0.5, lr=1e-3, lambda_f=1.0, lambda_l=1.0,
+        beta_f=1.0, beta_l=1.0,
     ):
         super().__init__()
         if not 0 < eta <= 1:
             raise ValueError("eta must be in (0, 1]")
+        if not all(math.isfinite(value) and value >= 0 for value in (beta_f, beta_l)):
+            raise ValueError("Lagrange weights beta_f/beta_l must be finite and non-negative")
         self.pi = pi
         self.flow_map = flow_map
         self.rg_vfm = flow_map.f_flowmap.vfm
@@ -21,6 +26,8 @@ class LitCSPFlowMap(L.LightningModule):
         self.lr = lr
         self.lambda_f = lambda_f
         self.lambda_l = lambda_l
+        self.beta_f = beta_f
+        self.beta_l = beta_l
 
     def forward(self, graph, s, t):
         """Return the coordinate and lattice endpoints under keys f/l."""
@@ -55,8 +62,8 @@ class LitCSPFlowMap(L.LightningModule):
         t = s + torch.rand_like(s) * (1 - s)
         lagrange = self.flow_map.lagrange_loss(graph_s, s, t, self.pi)
         loss = (
-            self.lambda_f * (tangent["f"] + lagrange["f"])
-            + self.lambda_l * (tangent["l"] + lagrange["l"])
+            self.lambda_f * (tangent["f"] + self.beta_f * lagrange["f"])
+            + self.lambda_l * (tangent["l"] + self.beta_l * lagrange["l"])
         )
         self.log_dict(
             {
