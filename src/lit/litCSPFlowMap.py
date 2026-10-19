@@ -55,8 +55,8 @@ class LitCSPFlowMap(L.LightningModule):
         t = s + torch.rand_like(s) * (1 - s)
         lagrange = self.flow_map.lagrange_loss(graph_s, s, t, self.pi)
         loss = (
-            self.lambda_f * (tangent["f"] + lagrange["f"])
-            + self.lambda_l * (tangent["l"] + lagrange["l"])
+            self.lambda_f * (tangent["f"] + 10 * lagrange["f"])
+            + self.lambda_l * (tangent["l"] + 3 * lagrange["l"])
         )
         self.log_dict(
             {

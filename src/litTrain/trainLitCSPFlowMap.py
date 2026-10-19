@@ -34,10 +34,10 @@ n_epoch = 3000
 lr = 1e-3
 batch_size = 256
 num_workers = 1
-eta = 0.5
+eta = 0.4
 evaluate_batch_size = 64
-val_portion = 0.2
-generation_eval_every_n_epochs = 50
+val_portion = 0.8
+generation_eval_every_n_epochs = 10
 
 data_folder = "data/mp-20"
 dataset_name = "mp-20"
@@ -48,6 +48,7 @@ l_vfm_kwargs = {
 }
 f_vfm_kwargs = {
     "total_time": total_time,
+
     "time_eps": 1e-3,
     "max_velocity_scale": None,
     "max_loss_weight": 100.0,
@@ -57,7 +58,7 @@ f_vfm_kwargs = {
 
 
 sample_kwargs = {
-    "n_steps": 1,
+    "n_steps": 4,
 }
 
 nn_kwargs = {
@@ -75,7 +76,7 @@ nn_kwargs = {
 
 lit_kwargs = {
     "lambda_l": 1.0,
-    "lambda_f": 1.0,
+    "lambda_f": 5.0,
 }
 
 
