@@ -76,7 +76,9 @@ nn_kwargs = {
 
 lit_kwargs = {
     "lambda_l": 1.0,
-    "lambda_f": 5.0,
+    "lambda_f": 1.0,
+    "beta_l": 1.0,
+    "beta_f": 1.0,
 }
 
 
@@ -103,6 +105,8 @@ def build_flowmap() -> JointFlowMapCSP:
     return JointFlowMapCSP(
         f_flowmap=VFMFlowMap(RGVFM(FlatTorus01(dim=dim), **f_vfm_kwargs)),
         l_flowmap=VFMFlowMap(VFM(dim=6, **l_vfm_kwargs)),
+        # Self-distillation treats the diagonal endpoint prediction as a teacher.
+        stop_gradient_f=True,
     )
 
 
@@ -184,6 +188,8 @@ def main():
         lr=lr,
         lambda_l=lit_kwargs["lambda_l"],
         lambda_f=lit_kwargs["lambda_f"],
+        beta_l=lit_kwargs["beta_l"],
+        beta_f=lit_kwargs["beta_f"],
     )
 
     experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_eta_{eta}"
