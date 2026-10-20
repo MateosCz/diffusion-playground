@@ -9,7 +9,8 @@ from torch_geometric.data import Data
 class Ambient_CSPLayer(nn.Module):
     def __init__(
             self,
-            dis_emb: SinEmbedding,
+            dis_emb: nn.Module,
+            dis_emb_dim: int,
             hidden_dim: int = 128,
             act_fn: nn.Module = nn.SiLU(),
             ln: bool = False,
@@ -17,10 +18,10 @@ class Ambient_CSPLayer(nn.Module):
         super(Ambient_CSPLayer, self).__init__()
 
         self.dis_emb = dis_emb
-        self.dis_dim = dis_emb.dim
+        self.dis_emb_dim = dis_emb_dim
 
         input_dim = (
-                hidden_dim * 2 + self.dis_dim + 6
+                hidden_dim * 2 + self.dis_emb_dim + 6
         )  # hidden states + relative geometry + lattice
 
         self.edge_mlp = nn.Sequential(
@@ -117,7 +118,8 @@ class Ambient_CSPNet(nn.Module):
             time_dim: int = 128,
             num_layers: int = 4,
             h_dim: int = 100,
-            num_freqs: int = 10,
+            # num_freqs: int = 10,
+            dis_emb_dim: int = 128,
             ln: bool = True,
             smooth: bool = False,
             pred_h: bool = False,
@@ -148,7 +150,13 @@ class Ambient_CSPNet(nn.Module):
 
         self.atom_latent_emb = nn.Linear(hidden_dim + 2 * time_dim + self.radii_emb_dim + 6, hidden_dim)
 
-        self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        # self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        self.dis_emb_dim = dis_emb_dim
+        # self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        self.dis_emb = nn.Sequential(
+            nn.Linear(f_dim, self.dis_emb_dim),
+            nn.SiLU(),
+        )
 
         if time_emb is None:
             time_emb = FourierEmbedding(in_features=1, out_features=time_dim)
@@ -159,7 +167,11 @@ class Ambient_CSPNet(nn.Module):
         self.layers = nn.ModuleList(
             [
                 Ambient_CSPLayer(
-                    self.dis_emb, hidden_dim=hidden_dim, act_fn=self.act_fn, ln=ln
+                    dis_emb=self.dis_emb,
+                    dis_emb_dim=self.dis_emb_dim,
+                    hidden_dim=hidden_dim,
+                    act_fn=self.act_fn,
+                    ln=ln,
                 )
                 for _ in range(num_layers)
             ]
