@@ -47,7 +47,8 @@ DEFAULT_CKPT_GLOB = f"checkpoints/*/CSPVNet_KLDM_{dataset_name}_*/*.ckpt"
 
 # Reverse-diffusion sampling on CPU is robust and avoids missing MPS/CUDA TDM
 # kernels; override with --device if you have full GPU kernel coverage.
-DEFAULT_DEVICE = "cuda"
+# DEFAULT_DEVICE = "cuda"
+DEFAULT_DEVICE = "mps"
 
 # StructureMatcher tolerances used for the CSP match rate (DiffCSP/CDVAE style).
 MATCHER_KWARGS = dict(stol=0.5, angle_tol=10.0, ltol=0.3)
@@ -170,6 +171,16 @@ def load_lit_model(ckpt_path: str, device: torch.device) -> LitCSPVNet:
         map_location=device,
         weights_only=False
     )
+    # ``kldm`` is supplied explicitly above, so Lightning cannot restore this
+    # non-tensor setting from the checkpoint. Interpret the trained output as
+    # its saved target (x0/noise/score), not the current training-script default.
+    parameterization = lit.diffusion_kwargs.get("l_parameterization")
+    if parameterization is not None:
+        if parameterization not in {"x0", "noise", "score"}:
+            raise ValueError(
+                f"Unsupported checkpoint lattice parameterization: {parameterization!r}"
+            )
+        lit.kldm.l_diffusion.parameterization = parameterization
     lit.eval()
     lit.to(device)
     return lit
