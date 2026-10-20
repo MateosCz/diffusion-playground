@@ -1,7 +1,7 @@
 from torch import nn
 import torch
 import math
-
+from typing import Tuple
 class SinusoidalTimeEmbedding(nn.Module):
     """
     Sinusoidal time embedding for time-dependent score network.
@@ -47,12 +47,13 @@ class SinEmbedding(nn.Module):
     (The original DiffCSP design used ``2*pi * k`` for coordinates in ``[0, 1)``;
     dropping the ``2*pi`` factor rescales that convention to the ``2*pi`` torus.)
     """
-    def __init__(self, n_frequencies: int = 10, n_space: int = 3):
+    def __init__(self, n_frequencies: int = 10, n_space: int = 3, period: Tuple[float, float] = (-math.pi, math.pi)):
         super().__init__()
+        self.period = period
         self.n_frequencies = n_frequencies
         self.n_space = n_space
         self.dim = n_space * n_frequencies * 2
-        freqs = torch.arange(n_frequencies, dtype=torch.float32)
+        freqs = torch.arange(n_frequencies, dtype=torch.float32) * (2 * math.pi) / (self.period[1] - self.period[0])
         self.register_buffer("frequencies", freqs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

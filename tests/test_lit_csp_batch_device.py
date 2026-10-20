@@ -11,11 +11,11 @@ from src.flow_maps.vfm_flowmap import VFMFlowMap
 from src.flow_matching.rg_vfm import RGVFM
 from src.lit.litCSPFlowMap import LitCSPFlowMap
 from src.manifolds import FlatTorus01
-from src.nn.ACSPVNet import Ambient_CSPVNet
+from src.nn.ACSPNet import Ambient_CSPNet
 
 
 def make_module():
-    model = Ambient_CSPVNet(
+    model = Ambient_CSPNet(
         hidden_dim=8, time_dim=4, num_layers=1, h_dim=8, num_freqs=2,
     )
     flow = JointFlowMapCSP(VFMFlowMap(RGVFM(

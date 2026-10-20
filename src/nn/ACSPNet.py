@@ -6,21 +6,22 @@ from src.nn.scoreNNBlock import SinEmbedding, FourierEmbedding
 from torch_geometric.data import Data
 
 
-class Ambient_CSPVLayer(nn.Module):
+class Ambient_CSPLayer(nn.Module):
     def __init__(
             self,
-            dis_emb: SinEmbedding,
+            dis_emb: nn.Module,
+            dis_emb_dim: int,
             hidden_dim: int = 128,
             act_fn: nn.Module = nn.SiLU(),
             ln: bool = False,
     ):
-        super(Ambient_CSPVLayer, self).__init__()
+        super(Ambient_CSPLayer, self).__init__()
 
         self.dis_emb = dis_emb
-        self.dis_dim = dis_emb.dim
+        self.dis_emb_dim = dis_emb_dim
 
         input_dim = (
-                hidden_dim * 2 + self.dis_dim + 6
+                hidden_dim * 2 + self.dis_emb_dim + 6
         )  # hidden states + relative geometry + lattice
 
         self.edge_mlp = nn.Sequential(
@@ -104,7 +105,7 @@ class Ambient_CSPVLayer(nn.Module):
         return node_input + node_output
 
 
-class Ambient_CSPVNet(nn.Module):
+class Ambient_CSPNet(nn.Module):
     """Two-time endpoint GNN for fractional coordinates and lattice parameters.
 
     graph.x/pos hold ambient cosine/sine pairs, shape (N, f_dim).
@@ -117,15 +118,17 @@ class Ambient_CSPVNet(nn.Module):
             time_dim: int = 128,
             num_layers: int = 4,
             h_dim: int = 100,
-            num_freqs: int = 10,
+            # num_freqs: int = 10,
+            dis_emb_dim: int = 128,
             ln: bool = True,
             smooth: bool = False,
             pred_h: bool = False,
             pred_l: bool = True,
             time_emb: nn.Module = None,
             f_dim: int = 6, # ambient (cosine/sine) pairs for 3D data 3x2
+            radii_emb_dim: int = 128,
     ):
-        super(Ambient_CSPVNet, self).__init__()
+        super(Ambient_CSPNet, self).__init__()
         if f_dim < 2 or f_dim % 2:
             raise ValueError("f_dim must contain complete cosine/sine pairs")
 
@@ -138,10 +141,22 @@ class Ambient_CSPVNet(nn.Module):
         else:
             # we just need to embed the given discrete h
             self.node_embedding = nn.Embedding(h_dim + 1, hidden_dim)
+        self.radii_emb_dim = radii_emb_dim
+        self.radii_emb = nn.Sequential(
+            nn.Linear(f_dim // 2, self.radii_emb_dim),
+            nn.SiLU(),
+        )
 
-        self.atom_latent_emb = nn.Linear(hidden_dim + 2 * time_dim + f_dim // 2 + 6, hidden_dim)
 
-        self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        self.atom_latent_emb = nn.Linear(hidden_dim + 2 * time_dim + self.radii_emb_dim + 6, hidden_dim)
+
+        # self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        self.dis_emb_dim = dis_emb_dim
+        # self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        self.dis_emb = nn.Sequential(
+            nn.Linear(f_dim, self.dis_emb_dim),
+            nn.SiLU(),
+        )
 
         if time_emb is None:
             time_emb = FourierEmbedding(in_features=1, out_features=time_dim)
@@ -151,8 +166,12 @@ class Ambient_CSPVNet(nn.Module):
         # Message-passing layers
         self.layers = nn.ModuleList(
             [
-                Ambient_CSPVLayer(
-                    self.dis_emb, hidden_dim=hidden_dim, act_fn=self.act_fn, ln=ln
+                Ambient_CSPLayer(
+                    dis_emb=self.dis_emb,
+                    dis_emb_dim=self.dis_emb_dim,
+                    hidden_dim=hidden_dim,
+                    act_fn=self.act_fn,
+                    ln=ln,
                 )
                 for _ in range(num_layers)
             ]
@@ -165,11 +184,11 @@ class Ambient_CSPVNet(nn.Module):
         self.out_f = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             self.act_fn,
-            nn.Linear(hidden_dim, f_dim, bias=False),
+            nn.Linear(hidden_dim, f_dim, bias=True),
         )
 
         if pred_l:
-            self.out_l = nn.Linear(hidden_dim, 6, bias=False)
+            self.out_l = nn.Linear(hidden_dim, 6, bias=True)
 
         if pred_h:
             self.out_h = nn.Linear(hidden_dim, h_dim)
@@ -199,9 +218,10 @@ class Ambient_CSPVNet(nn.Module):
 
         pairs = pos.reshape(-1, self.f_dim // 2, 2)
         radii_squared = pairs.square().sum(-1)
+        radii_features = self.radii_emb(radii_squared)
 
         node_features = self.node_embedding(h)
-        node_features = torch.cat([node_features, time_per_atom, radii_squared, l[batch]], dim=1) 
+        node_features = torch.cat([node_features, time_per_atom, radii_features, l[batch]], dim=1) 
         node_features = self.atom_latent_emb(node_features)
 
         # Relative dot/cross products are invariant under periodic translations.
@@ -236,10 +256,10 @@ class Ambient_CSPVNet(nn.Module):
             graph_features = scatter(node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0])
             out_l = self.out_l(graph_features)
             out_l = out_l.view(-1, 6)
-            out["l"] = out_l
+            out["l"] = out_l + l
 
         if self.pred_h:
             out_h = self.out_h(node_features)
-            out["h"] = out_h
+            out["h"] = out_h + h
 
         return out
