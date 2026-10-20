@@ -184,11 +184,11 @@ class Ambient_CSPNet(nn.Module):
         self.out_f = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             self.act_fn,
-            nn.Linear(hidden_dim, f_dim, bias=False),
+            nn.Linear(hidden_dim, f_dim, bias=True),
         )
 
         if pred_l:
-            self.out_l = nn.Linear(hidden_dim, 6, bias=False)
+            self.out_l = nn.Linear(hidden_dim, 6, bias=True)
 
         if pred_h:
             self.out_h = nn.Linear(hidden_dim, h_dim)
@@ -256,10 +256,10 @@ class Ambient_CSPNet(nn.Module):
             graph_features = scatter(node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0])
             out_l = self.out_l(graph_features)
             out_l = out_l.view(-1, 6)
-            out["l"] = out_l
+            out["l"] = out_l + l
 
         if self.pred_h:
             out_h = self.out_h(node_features)
-            out["h"] = out_h
+            out["h"] = out_h + h
 
         return out

@@ -13,7 +13,7 @@ import wandb
 import src.dataLib.transform as T
 from src.dataLib.data_util import PyGData_to_Structure, kldm_output_to_structures_batch
 from src.dataLib.realCrystal import CrystalDataset
-from src.nn.ACSPVNet import Ambient_CSPVNet
+from src.nn.ACSPNet import Ambient_CSPNet
 from src.flow_maps.vfm_flowmap import VFMFlowMap
 from src.flow_matching.vfm import VFM
 from src.flow_matching.rg_vfm import RGVFM
@@ -34,9 +34,9 @@ n_epoch = 3000
 lr = 1e-3
 batch_size = 256
 num_workers = 1
-eta = 0.4
+eta = 0.5
 evaluate_batch_size = 64
-val_portion = 0.8
+val_portion = 0.2
 generation_eval_every_n_epochs = 10
 
 data_folder = "data/mp-20"
@@ -66,19 +66,29 @@ nn_kwargs = {
     "time_dim": 256,
     "num_layers": 6,
     "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
-    "num_freqs": 128,
+    # "num_freqs": 128,
+    "dis_emb_dim": 128,
     "ln": True,
     "smooth": False,    # embed discrete atom types via nn.Embedding
     "pred_h": False,    # <-- do not predict atom types
     "pred_l": True,
     "f_dim": 2 * dim,
+    "radii_emb_dim": 128,
 }
 
 lit_kwargs = {
     "lambda_l": 1.0,
-    "lambda_f": 1.0,
-    "beta_l": 1.0,
-    "beta_f": 1.0,
+    "lambda_f": 1.5,
+    "beta_l": 3.0,
+    "beta_f": 3.0,
+
+}
+
+train_kwargs = {
+    "with_ema": True,
+    "ema_decay": 0.999,
+    "ema_start": 500
+
 }
 
 
@@ -97,17 +107,18 @@ def build_transform() -> PyGT.Compose:
     )
 
 
-def build_model() -> Ambient_CSPVNet:
-    return Ambient_CSPVNet(**nn_kwargs)
+def build_model() -> Ambient_CSPNet:
+    return Ambient_CSPNet(**nn_kwargs)
 
 
 def build_flowmap() -> JointFlowMapCSP:
     return JointFlowMapCSP(
         f_flowmap=VFMFlowMap(RGVFM(FlatTorus01(dim=dim), **f_vfm_kwargs)),
         l_flowmap=VFMFlowMap(VFM(dim=6, **l_vfm_kwargs)),
-        # Self-distillation treats the diagonal endpoint prediction as a teacher.
-        stop_gradient_f=True,
+        # # Self-distillation treats the diagonal endpoint prediction as a teacher.
+        # stop_gradient_f=True,
     )
+
 
 
 class FractionalPositions:
@@ -192,7 +203,7 @@ def main():
         beta_f=lit_kwargs["beta_f"],
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_eta_{eta}"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_eta_{eta}_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_beta_l_{lit_kwargs['beta_l']}_beta_f_{lit_kwargs['beta_f']}_zeroinitNN"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
@@ -220,6 +231,7 @@ def main():
         check_val_every_n_epoch=generation_eval_every_n_epochs,
         num_sanity_val_steps=0,
         gradient_clip_val=1.0,
+        # accumulate_grad_batches=4,
         callbacks=[
             checkpoint_callback, last_checkpoint(checkpoint_dir),
             CSPGenerationMetrics(transform, **sample_kwargs),

@@ -5,13 +5,18 @@ import math
 import lightning as L
 import torch
 from torch_geometric.data import Batch
-
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+import torch.nn as nn
 
 
 class LitCSPFlowMap(L.LightningModule):
     def __init__(
         self, pi, flow_map, eta=0.5, lr=1e-3, lambda_f=1.0, lambda_l=1.0,
         beta_f=1.0, beta_l=1.0,
+        warmup_steps: int = 1000,
+        with_ema: bool = True,
+        ema_decay:float = 0.999,
+        ema_start: int = 100,
     ):
         super().__init__()
         if not 0 < eta <= 1:
@@ -28,6 +33,31 @@ class LitCSPFlowMap(L.LightningModule):
         self.lambda_l = lambda_l
         self.beta_f = beta_f
         self.beta_l = beta_l
+        nn.init.normal_(
+                self.pi.out_f[-1].weight,
+                mean=0.0,
+                std=0.01,
+            )
+        nn.init.zeros_(self.pi.out_f[-1].bias)
+
+        nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
+        nn.init.zeros_(self.pi.out_l.bias)
+
+        self.warmup_steps = warmup_steps
+        if with_ema:
+            self.ema_pi = torch.optim.swa_utils.AveragedModel(
+                self.pi,
+                multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(ema_decay),
+            )
+            self.ema_start = ema_start
+            self.ema_pi.requires_grad_(False)
+
+        else:
+            self.ema_pi = None
+
+        self.save_hyperparameters(ignore=["pi", "flow_map", "rg_vfm", "l_vfm"])
+
+        
 
     def forward(self, graph, s, t):
         """Return the coordinate and lattice endpoints under keys f/l."""
@@ -87,6 +117,13 @@ class LitCSPFlowMap(L.LightningModule):
     def test_step(self, batch, batch_idx=0):
         return self._shared_step(batch, "test")
 
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        if (
+                self.ema_pi is not None
+                and self.trainer.current_epoch > self.hparams.ema_start
+        ):
+            self.ema_pi.update_parameters(self.pi)
+
     @torch.inference_mode()
     def sample(self, batch, n_steps=1):
         """Draw priors using the crystal template, then sample from time 0 to 1."""
@@ -99,7 +136,31 @@ class LitCSPFlowMap(L.LightningModule):
             device=f0.device, dtype=f0.dtype,
         )
         graph0 = self.flow_map._update_graph(batch, f0, l0)
-        return self.flow_map.sample(graph0, self.pi, n_steps=n_steps)
+        if self.ema_pi is not None and self.ema_pi.n_averaged.item() > 0:
+            pi = self.ema_pi.module
+        else:
+            pi = self.pi
+        return self.flow_map.sample(graph0, pi, n_steps=n_steps)
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.pi.parameters(), lr=self.lr)
+        opt = torch.optim.AdamW(self.pi.parameters(), lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-12)
+
+        min_lr_ratio = 0.01
+        total_steps = int(self.trainer.estimated_stepping_batches)
+
+        assert self.warmup_steps < total_steps
+
+        scheduler = SequentialLR(opt, [
+            LinearLR(opt, start_factor=0.01, end_factor=1.0, total_iters=self.warmup_steps),
+            CosineAnnealingLR(opt, T_max=total_steps - self.warmup_steps, eta_min=min_lr_ratio * self.lr),
+        ], milestones=[self.warmup_steps])
+        # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=5)
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            }
+        }
+
