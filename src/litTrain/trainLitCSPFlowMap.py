@@ -23,6 +23,9 @@ from src.lit.callbacks import last_checkpoint
 from src.manifolds import FlatTorus01
 from src.metrics.csp import CSPMetrics
 from src.device import get_default_device, get_lightning_accelerator
+from matplotlib import pyplot as plt
+from ase.visualize.plot import plot_atoms
+from pymatgen.io.ase import AseAtomsAdaptor
 
 
 # --------------------------------------------------------------------------- #
@@ -32,7 +35,7 @@ total_time = 1.0
 dim = 3
 n_epoch = 3000
 lr = 1e-3
-batch_size = 256
+batch_size = 64
 num_workers = 1
 eta = 0.5
 evaluate_batch_size = 64
@@ -87,7 +90,8 @@ lit_kwargs = {
 train_kwargs = {
     "with_ema": True,
     "ema_decay": 0.999,
-    "ema_start": 500
+    "ema_start": 500,
+    "warmup_steps": 1000,
 
 }
 
@@ -159,6 +163,61 @@ class CSPGenerationMetrics(L.Callback):
         )
         self.metrics.update(structures, targets)
 
+
+        # 每次验证只在第一个 batch 绘图；多卡时只由 rank 0 上传。
+        if batch_idx != 0 or dataloader_idx != 0 or not trainer.is_global_zero:
+            return
+
+        logger = next(
+            (lg for lg in trainer.loggers if isinstance(lg, WandbLogger)),
+            None,
+        )
+        if logger is None:
+            return
+
+        num_images = 25
+
+        # 成对选取，保证生成图和真实图的 Sample 编号对应。
+        pairs = [
+            (s, t) for s, t in zip(structures, targets) if s is not None
+        ][:num_images]
+        if not pairs:
+            return
+
+        for key, items in (
+            ("val/images_generated", [s for s, _ in pairs]),
+            ("val/images_gt", [t for _, t in pairs]),
+        ):
+            ncols = min(5, len(items))
+            nrows = (len(items) + ncols - 1) // ncols
+
+            fig, axes = plt.subplots(
+                nrows,
+                ncols,
+                figsize=(3 * ncols, 3 * nrows),
+                squeeze=False,
+            )
+            try:
+                for ax in axes.flat:
+                    ax.set_axis_off()
+
+                for i, (ax, structure) in enumerate(
+                    zip(axes.flat, items), start=1,
+                ):
+                    atoms = AseAtomsAdaptor.get_atoms(structure)
+                    atoms.wrap()
+                    plot_atoms(atoms, ax=ax)
+                    ax.set_title(f"Sample {i}")
+
+                fig.tight_layout()
+                logger.log_image(
+                    key,
+                    [fig],
+                    step=trainer.global_step,
+                )
+            finally:
+                plt.close(fig)
+
     def on_validation_epoch_end(self, trainer, pl_module):
         if not trainer.sanity_checking:
             pl_module.log_dict({f"val/{key}": value for key, value in self.metrics.summarize().items()})
@@ -201,6 +260,7 @@ def main():
         lambda_f=lit_kwargs["lambda_f"],
         beta_l=lit_kwargs["beta_l"],
         beta_f=lit_kwargs["beta_f"],
+        **train_kwargs,
     )
 
     experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_eta_{eta}_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_beta_l_{lit_kwargs['beta_l']}_beta_f_{lit_kwargs['beta_f']}_zeroinitNN"
@@ -214,8 +274,8 @@ def main():
     checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
-        filename="flowmap_csp_{epoch:04d}-{val/total_loss:.6f}",
-        monitor="val/total_loss",
+        filename="flowmap_csp_{epoch:04d}-{val/rmse:.6f}",
+        monitor="val/rmse",
         mode="min",
         save_top_k=1,
         save_last=False,
