@@ -48,13 +48,14 @@ class Endpoint_Flowmap_CSP:
         (f, l), (df_dt, dl_dt) = torch.autograd.functional.jvp(
             joint_state, (t,), (torch.ones_like(t),), create_graph=True,
         )
-        prediction = pi(self._update_graph(graph, f, l), t, t)
-        pred_f, pred_l = prediction["f"], prediction["l"]
-        residual_f = (1 - t)[graph.batch] * df_dt - (pred_f.detach() - f)
-        residual_l = (1 - t) * dl_dt - (pred_l.detach() - l)
+        with torch.no_grad():
+            prediction = pi(self._update_graph(graph, f, l), t, t)
+        pred_f1, pred_l1 = prediction["f"], prediction["l"]
+        lagrange_f = (1 - t)[graph.batch] * df_dt - (pred_f1.detach() - f)
+        lagrange_l = (1 - t) * dl_dt - (pred_l1.detach() - l)
         return {
-            "f": residual_f.square().sum(-1).mean(),
-            "l": residual_l.square().sum(-1).mean(),
+            "f": lagrange_f.square().sum(-1).mean(),
+            "l": lagrange_l.square().sum(-1).mean(),
         }
 
     @torch.inference_mode()
