@@ -1,5 +1,6 @@
 """Train an ambient coordinate/lattice flow map on MP20, conditioning on atom types."""
 
+import json
 import os
 from datetime import datetime
 
@@ -26,7 +27,9 @@ from src.device import get_default_device, get_lightning_accelerator
 from matplotlib import pyplot as plt
 from ase.visualize.plot import plot_atoms
 from pymatgen.io.ase import AseAtomsAdaptor
-
+from pymatgen.analysis.structure_matcher import StructureMatcher
+from pymatgen.core import Lattice, Structure
+import numpy as np
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -123,6 +126,36 @@ def build_flowmap() -> JointFlowMapCSP:
         # stop_gradient_f=True,
     )
 
+def lattice_errors(pred, target, *, niggli=True):
+    """input two valid, non-degenerate pymatgen Lattice."""
+    if niggli:
+        pred = pred.get_niggli_reduced_lattice()
+        target = target.get_niggli_reduced_lattice()
+
+    p_abc = np.asarray(pred.abc)
+    t_abc = np.asarray(target.abc)
+
+    # G = L @ L.T: eliminate the effect of overall rotation
+    Gp = pred.metric_tensor
+    Gt = target.metric_tensor
+
+    return {
+        # length mean square root error: 0.1 means 10%
+        "length_msre_relative": float(np.mean(np.sqrt((p_abc / t_abc - 1) ** 2))),
+
+        # three angle mean square root error, unit: degree
+        "angle_msre": float(np.mean(np.sqrt((np.asarray(pred.angles) - np.asarray(target.angles)) ** 2))),
+
+        # volume square root error
+        "volume_sre_relative": float(np.sqrt((pred.volume / target.volume - 1) ** 2)),
+
+        # # Gram matrix relative error, dimensionless, contains size and angle differences
+        # "gram_rel": float(
+        #     np.linalg.norm(Gp - Gt, "fro")
+        #     / np.linalg.norm(Gt, "fro")
+        # ),
+    }
+
 
 
 class FractionalPositions:
@@ -161,10 +194,21 @@ class CSPGenerationMetrics(L.Callback):
         structures = kldm_output_to_structures_batch(
             batch, generated.l, fractional, *self.transforms,
         )
+        errors = [
+            lattice_errors(s.lattice, t.lattice)
+            for s, t in zip(structures, targets) if s is not None
+        ]
+        if errors:
+            # Lightning weights batch means by crystal count and resets each epoch.
+            pl_module.log_dict(
+                {f"val/lattice_{key}": float(np.mean([e[key] for e in errors]))
+                 for key in errors[0]},
+                on_step=False, on_epoch=True, batch_size=len(errors), sync_dist=True,
+            )
         self.metrics.update(structures, targets)
 
 
-        # 每次验证只在第一个 batch 绘图；多卡时只由 rank 0 上传。
+        # only plot the first batch; only rank 0 uploads when multi-card
         if batch_idx != 0 or dataloader_idx != 0 or not trainer.is_global_zero:
             return
 
@@ -174,15 +218,44 @@ class CSPGenerationMetrics(L.Callback):
         )
         if logger is None:
             return
+        if (pl_module.current_epoch + 1) % 50 != 0:
+            return
 
         num_images = 25
 
-        # 成对选取，保证生成图和真实图的 Sample 编号对应。
+        # sample pairs of generated and target structures, make sure the orders are same
         pairs = [
             (s, t) for s, t in zip(structures, targets) if s is not None
         ][:num_images]
         if not pairs:
             return
+        plot_matcher = StructureMatcher(
+            primitive_cell=False,
+            scale=False,
+            ltol=0.3,
+            stol=0.5,
+            angle_tol=10,
+        )
+
+        aligned_pairs = []
+        for generated, gt in pairs:
+            aligned = plot_matcher.get_s2_like_s1(gt, generated)  # this is the core line
+
+            if aligned is not None:
+
+                aligned = Structure(
+                    lattice=Lattice.from_parameters(*aligned.lattice.parameters),
+                    species=aligned.species,
+                    coords=aligned.frac_coords,
+                    coords_are_cartesian=False,
+                    to_unit_cell=False,
+                )
+
+            aligned_pairs.append(
+                (aligned if aligned is not None else generated, gt)
+            )
+
+        pairs = aligned_pairs
 
         for key, items in (
             ("val/images_generated", [s for s, _ in pairs]),
@@ -221,6 +294,19 @@ class CSPGenerationMetrics(L.Callback):
     def on_validation_epoch_end(self, trainer, pl_module):
         if not trainer.sanity_checking:
             pl_module.log_dict({f"val/{key}": value for key, value in self.metrics.summarize().items()})
+
+class SaveTrainingConfig(L.Callback):
+    def __init__(self, config, checkpoint_dir):
+        super().__init__()
+        self.config = config
+        self.checkpoint_dir = checkpoint_dir
+
+    def on_fit_start(self, trainer, pl_module):
+        if trainer.is_global_zero:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+            path = os.path.join(self.checkpoint_dir, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
 
 
 def main():
@@ -271,7 +357,7 @@ def main():
         checkpoint_name=experiment_name,
     )
 
-    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
+    checkpoint_dir = f"checkpoints/{timestamp}_cspFlowMap/{experiment_name}"
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
         filename="flowmap_csp_{epoch:04d}-{val/rmse:.6f}",
@@ -281,6 +367,33 @@ def main():
         save_last=False,
         auto_insert_metric_name=False,
     )
+
+    config = {
+        "dataset_name": dataset_name,
+        "data_folder": data_folder,
+        "dim": dim,
+        "total_time": total_time,
+        "n_epoch": n_epoch,
+        "lr": lr,
+        "eta": eta,
+        "batch_size": batch_size,
+        "evaluate_batch_size": evaluate_batch_size,
+        "val_portion": val_portion,
+        "num_workers": num_workers,
+        "generation_eval_every_n_epochs": generation_eval_every_n_epochs,
+        "accelerator": accelerator,
+        "nn_kwargs": nn_kwargs,
+        "lit_kwargs": lit_kwargs,
+        "train_kwargs": train_kwargs,
+        "sample_kwargs": sample_kwargs,
+        "l_vfm_kwargs": l_vfm_kwargs,
+        "f_vfm_kwargs": f_vfm_kwargs,
+        "transforms": {
+            "lengths_loc_scale": f"{data_folder}/train_mean_std_stats.json",
+            "angles_loc_scale": transform.transforms[1].angles_loc_scale,
+            "positions": "fractional",
+        },
+    }
 
     trainer = L.Trainer(
         logger=wandb_logger,
@@ -295,6 +408,7 @@ def main():
         callbacks=[
             checkpoint_callback, last_checkpoint(checkpoint_dir),
             CSPGenerationMetrics(transform, **sample_kwargs),
+            SaveTrainingConfig(config, checkpoint_dir),
         ],
     )
 
