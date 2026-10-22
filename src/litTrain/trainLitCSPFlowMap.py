@@ -40,10 +40,11 @@ n_epoch = 3000
 lr = 1e-3
 batch_size = 64
 num_workers = 1
-eta = 0.5
+eta = 0.75
 evaluate_batch_size = 64
 val_portion = 0.2
 generation_eval_every_n_epochs = 10
+continue_ckpt = None  # Set to a checkpoint path to resume training; None starts a new run.
 
 data_folder = "data/mp-20"
 dataset_name = "mp-20"
@@ -126,38 +127,6 @@ def build_flowmap() -> JointFlowMapCSP:
         # stop_gradient_f=True,
     )
 
-def lattice_errors(pred, target, *, niggli=True):
-    """input two valid, non-degenerate pymatgen Lattice."""
-    if niggli:
-        pred = pred.get_niggli_reduced_lattice()
-        target = target.get_niggli_reduced_lattice()
-
-    p_abc = np.asarray(pred.abc)
-    t_abc = np.asarray(target.abc)
-
-    # G = L @ L.T: eliminate the effect of overall rotation
-    Gp = pred.metric_tensor
-    Gt = target.metric_tensor
-
-    return {
-        # length mean square root error: 0.1 means 10%
-        "length_msre_relative": float(np.mean(np.sqrt((p_abc / t_abc - 1) ** 2))),
-
-        # three angle mean square root error, unit: degree
-        "angle_msre": float(np.mean(np.sqrt((np.asarray(pred.angles) - np.asarray(target.angles)) ** 2))),
-
-        # volume square root error
-        "volume_sre_relative": float(np.sqrt((pred.volume / target.volume - 1) ** 2)),
-
-        # # Gram matrix relative error, dimensionless, contains size and angle differences
-        # "gram_rel": float(
-        #     np.linalg.norm(Gp - Gt, "fro")
-        #     / np.linalg.norm(Gt, "fro")
-        # ),
-    }
-
-
-
 class FractionalPositions:
     """Position adapter for structure helpers: coordinates are already fractional."""
 
@@ -194,17 +163,6 @@ class CSPGenerationMetrics(L.Callback):
         structures = kldm_output_to_structures_batch(
             batch, generated.l, fractional, *self.transforms,
         )
-        errors = [
-            lattice_errors(s.lattice, t.lattice)
-            for s, t in zip(structures, targets) if s is not None
-        ]
-        if errors:
-            # Lightning weights batch means by crystal count and resets each epoch.
-            pl_module.log_dict(
-                {f"val/lattice_{key}": float(np.mean([e[key] for e in errors]))
-                 for key in errors[0]},
-                on_step=False, on_epoch=True, batch_size=len(errors), sync_dist=True,
-            )
         self.metrics.update(structures, targets)
 
 
@@ -226,7 +184,7 @@ class CSPGenerationMetrics(L.Callback):
         # sample pairs of generated and target structures, make sure the orders are same
         pairs = [
             (s, t) for s, t in zip(structures, targets) if s is not None
-        ][:num_images]
+        ]
         if not pairs:
             return
         plot_matcher = StructureMatcher(
@@ -239,7 +197,7 @@ class CSPGenerationMetrics(L.Callback):
 
         aligned_pairs = []
         for generated, gt in pairs:
-            aligned = plot_matcher.get_s2_like_s1(gt, generated)  # this is the core line
+            aligned = plot_matcher.get_s2_like_s1(gt, generated)
 
             if aligned is not None:
 
@@ -256,10 +214,11 @@ class CSPGenerationMetrics(L.Callback):
             )
 
         pairs = aligned_pairs
+        plot_pairs = pairs[:num_images]
 
         for key, items in (
-            ("val/images_generated", [s for s, _ in pairs]),
-            ("val/images_gt", [t for _, t in pairs]),
+            ("val/images_generated", [s for s, _ in plot_pairs]),
+            ("val/images_gt", [t for _, t in plot_pairs]),
         ):
             ncols = min(5, len(items))
             nrows = (len(items) + ncols - 1) // ncols
@@ -290,6 +249,21 @@ class CSPGenerationMetrics(L.Callback):
                 )
             finally:
                 plt.close(fig)
+
+        # Reuse the plotted pairs, including the fallback when alignment fails.
+        pl_module.log_dict(
+            {
+                "val/lattice_angle_mae": float(np.mean([
+                    np.abs(np.asarray(s.lattice.angles) - np.asarray(t.lattice.angles))
+                    for s, t in aligned_pairs
+                ])),  # degrees
+                "val/lattice_length_mae": float(np.mean([
+                    np.abs(np.asarray(s.lattice.abc) - np.asarray(t.lattice.abc))
+                    for s, t in aligned_pairs
+                ])),  # Angstrom
+            },
+            on_step=False, on_epoch=True, batch_size=len(aligned_pairs), rank_zero_only=True,
+        )
 
     def on_validation_epoch_end(self, trainer, pl_module):
         if not trainer.sanity_checking:
@@ -381,6 +355,7 @@ def main():
         "val_portion": val_portion,
         "num_workers": num_workers,
         "generation_eval_every_n_epochs": generation_eval_every_n_epochs,
+        "continue_ckpt": continue_ckpt,
         "accelerator": accelerator,
         "nn_kwargs": nn_kwargs,
         "lit_kwargs": lit_kwargs,
@@ -417,6 +392,7 @@ def main():
             model=lit_model,
             train_dataloaders=train_loader,
             val_dataloaders=val_loader,
+            ckpt_path=continue_ckpt,
         )
     finally:
         wandb.finish()

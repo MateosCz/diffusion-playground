@@ -120,6 +120,7 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         target: torch.Tensor,
         *,
         t: Optional[torch.Tensor] = None,
+        reduction: Literal["mean", "none"] = "mean",
     ) -> torch.Tensor:
         """Time-weighted squared geodesic distance to the target ``x_T``.
 
@@ -127,7 +128,10 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
         batch reduction. The weights can be capped with ``max_loss_weight``
         and normalized to have batch mean one with ``normalize_loss_weights``.
         Omitting ``t`` is equivalent to evaluating the objective at ``t=0``.
+        Use ``reduction="none"`` to retain one loss per sample.
         """
+        if reduction not in ("mean", "none"):
+            raise ValueError(f"unknown loss reduction: {reduction}")
         if prediction.shape != target.shape:
             raise ValueError(
                 "prediction and target must have the same shape, "
@@ -159,11 +163,12 @@ class RiemannianGaussianVariationalFlowMatching(BaseFlowMatching):
                 weight = weight.clamp_max(self.max_loss_weight)
             if self.normalize_loss_weights:
                 weight = weight / weight.mean().detach()
-            result = (weight * distance.pow(2)).mean()
+            result = weight * distance.pow(2)
             if self.normalize_loss:
                 result = result / self.manifold.intrinsic_dim
-            return result
-        return distance.pow(2).mean()
+        else:
+            result = distance.pow(2)
+        return result.mean() if reduction == "mean" else result
 
     def x_T_to_vector_field(
         self,

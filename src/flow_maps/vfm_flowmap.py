@@ -7,11 +7,12 @@ import torch.nn as nn
 class VFMFlowMap:
     """Affine endpoint flow map for Euclidean or ambient-space states."""
 
-    def __init__(self, rg_vfm: RGVFM | VFM):
+    def __init__(self, rg_vfm: RGVFM | VFM, is_graph_data: bool = False):
         self.vfm = rg_vfm
         # Keep existing fractional-coordinate callers working.
         self.rg_vfm = rg_vfm
-
+        self.is_graph_data = is_graph_data
+        
     def Xst(self, x_s, s, t, pi: nn.Module):
         """Affine flow map: x_s + (t-s) * (pi_s,t(x_s) - x_s) / (T-s)."""
         s = self.vfm.batch_time(s, x_s)

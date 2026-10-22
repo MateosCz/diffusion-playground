@@ -1,6 +1,7 @@
 """Joint coordinate/lattice flow map on the fixed time interval [0, 1]."""
 
 import torch
+from torch_geometric.nn import global_mean_pool
 
 from src.flow_maps.vfm_flowmap import VFMFlowMap
 from src.flow_matching.vfm import VFM
@@ -35,7 +36,10 @@ class Endpoint_Flowmap_CSP:
         """Return separate endpoint regression losses at s=t."""
         prediction = pi(grapht, t, t)
         pred_f, pred_l = prediction["f"], prediction["l"]
-        loss_f = self.f_flowmap.vfm.loss(pred_f, graph1.x, t=t[grapht.batch])
+        loss_f = self.f_flowmap.vfm.loss(
+            pred_f, graph1.x, t=t[grapht.batch], reduction="none",
+        )
+        loss_f = global_mean_pool(loss_f, grapht.batch, size=grapht.num_graphs).mean()
         loss_l = self.l_flowmap.vfm.loss(pred_l, graph1.l, t=t)
         return {"f": loss_f, "l": loss_l}
 
@@ -54,7 +58,9 @@ class Endpoint_Flowmap_CSP:
         lagrange_f = (1 - t)[graph.batch] * df_dt - (pred_f1.detach() - f)
         lagrange_l = (1 - t) * dl_dt - (pred_l1.detach() - l)
         return {
-            "f": lagrange_f.square().sum(-1).mean(),
+            "f": global_mean_pool(
+                lagrange_f.square().sum(-1), graph.batch, size=graph.num_graphs,
+            ).mean(),
             "l": lagrange_l.square().sum(-1).mean(),
         }
 
