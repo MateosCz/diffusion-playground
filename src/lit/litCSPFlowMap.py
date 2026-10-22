@@ -88,8 +88,12 @@ class LitCSPFlowMap(L.LightningModule):
 
         t, graph_t, target = self.sample_training_pair(diagonal)
         tangent = self.flow_map.tangent_loss(target, graph_t, t, self.pi)
-        s, graph_s, _ = self.sample_training_pair(off_diagonal)
-        t = s + torch.rand_like(s) * (1 - s)
+
+        # Uniform over the time triangle, with the state constructed at s.
+        a = self.rg_vfm.sample_time(off_diagonal.l)
+        b = self.rg_vfm.sample_time(off_diagonal.l)
+        s, t = torch.minimum(a, b), torch.maximum(a, b)
+        _, graph_s, _ = self.sample_training_pair(off_diagonal, t=s)
         lagrange = self.flow_map.lagrange_loss(graph_s, s, t, self.pi)
         loss = (
             self.lambda_f * (tangent["f"] + self.beta_f * lagrange["f"])
