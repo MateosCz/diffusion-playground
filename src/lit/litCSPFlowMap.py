@@ -8,6 +8,8 @@ from torch_geometric.data import Batch
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import torch.nn as nn
 
+from src.nn.ACSPNet import Weight_MLP
+
 
 class LitCSPFlowMap(L.LightningModule):
     def __init__(
@@ -17,6 +19,7 @@ class LitCSPFlowMap(L.LightningModule):
         with_ema: bool = True,
         ema_decay:float = 0.999,
         ema_start: int = 100,
+        weight_mlp_kwargs: dict | None = None,
     ):
         super().__init__()
         if not 0 < eta <= 1:
@@ -43,6 +46,16 @@ class LitCSPFlowMap(L.LightningModule):
         nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.pi.out_l.bias)
 
+        weight_mlp_kwargs = {
+            "n_hidden": 1, "n_neurons": pi.out_l.in_features,
+            "use_residual": False, **(weight_mlp_kwargs or {}),
+        }
+        self.weight_mlp = Weight_MLP(
+            input_dim=2, output_dim=2, act=nn.GELU(), **weight_mlp_kwargs,
+        )
+        nn.init.zeros_(self.weight_mlp.output_layer.weight)
+        nn.init.zeros_(self.weight_mlp.output_layer.bias)
+
         self.warmup_steps = warmup_steps
         if with_ema:
             self.ema_pi = torch.optim.swa_utils.AveragedModel(
@@ -62,6 +75,14 @@ class LitCSPFlowMap(L.LightningModule):
     def forward(self, graph, s, t):
         """Return the coordinate and lattice endpoints under keys f/l."""
         return self.pi(graph, s, t)
+
+    def weighted_loss(self, losses, s, t):
+        """Flow Maps log weights, one column each for coordinates and lattice."""
+        weight = self.weight_mlp(torch.cat([s, t], dim=-1))
+        return {
+            key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
+            for i, key in enumerate(("f", "l"))
+        }
 
     def sample_training_pair(self, graph1, graph0=None, *, t=None):
         """Return (t, graph_t, target_graph), with times of shape (B, 1)."""
@@ -88,6 +109,7 @@ class LitCSPFlowMap(L.LightningModule):
 
         t, graph_t, target = self.sample_training_pair(diagonal)
         tangent = self.flow_map.tangent_loss(target, graph_t, t, self.pi)
+        weighted_tangent = self.weighted_loss(tangent, t, t)
 
         # Uniform over the time triangle, with the state constructed at s.
         a = self.rg_vfm.sample_time(off_diagonal.l)
@@ -95,17 +117,18 @@ class LitCSPFlowMap(L.LightningModule):
         s, t = torch.minimum(a, b), torch.maximum(a, b)
         _, graph_s, _ = self.sample_training_pair(off_diagonal, t=s)
         lagrange = self.flow_map.lagrange_loss(graph_s, s, t, self.pi)
+        weighted_lagrange = self.weighted_loss(lagrange, s, t)
         loss = (
-            self.lambda_f * (tangent["f"] + self.beta_f * lagrange["f"])
-            + self.lambda_l * (tangent["l"] + self.beta_l * lagrange["l"])
+            self.lambda_f * (weighted_tangent["f"] + self.beta_f * weighted_lagrange["f"])
+            + self.lambda_l * (weighted_tangent["l"] + self.beta_l * weighted_lagrange["l"])
         )
         self.log_dict(
             {
                 f"{stage}/total_loss": loss,
-                f"{stage}/tangent_loss_f": tangent["f"],
-                f"{stage}/tangent_loss_l": tangent["l"],
-                f"{stage}/lagrange_loss_f": lagrange["f"],
-                f"{stage}/lagrange_loss_l": lagrange["l"],
+                f"{stage}/tangent_loss_f": tangent["f"].mean(),
+                f"{stage}/tangent_loss_l": tangent["l"].mean(),
+                f"{stage}/lagrange_loss_f": lagrange["f"].mean(),
+                f"{stage}/lagrange_loss_l": lagrange["l"].mean(),
             },
             on_step=stage == "train", on_epoch=True,
             prog_bar=stage in ("train", "val"), batch_size=batch.num_graphs,
@@ -147,7 +170,10 @@ class LitCSPFlowMap(L.LightningModule):
         return self.flow_map.sample(graph0, pi, n_steps=n_steps)
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW(self.pi.parameters(), lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-12)
+        opt = torch.optim.AdamW(
+            [*self.pi.parameters(), *self.weight_mlp.parameters()],
+            lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-12,
+        )
 
         min_lr_ratio = 0.01
         total_steps = int(self.trainer.estimated_stepping_batches)
