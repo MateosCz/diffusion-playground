@@ -24,10 +24,8 @@ class VFMFlowMap:
         return x_s + (t - s) * (pi(x_s, s, t) - x_s) / (self.vfm.total_time - s)
 
     def tangent_loss(self,x1, xt, t, pi: nn.Module):
-        """tangent loss for the flow map
-        E[||(pi_t,t(x_t) - x_1)/(1-t)||^2]
-        """
-        return self.vfm.loss(pi(xt, t, t), x1, t=t)
+        """Batch-averaged endpoint regression loss at s=t."""
+        return self.vfm.loss(pi(xt, t, t), x1, t=t).mean()
     
     def lagrange_loss(self, xs, s, t, pi: nn.Module):
         """Match (T-t) * dX_st/dt to stop_grad(pi_tt(X_st)) - X_st.

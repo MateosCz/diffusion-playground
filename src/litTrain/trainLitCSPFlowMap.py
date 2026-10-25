@@ -69,11 +69,13 @@ sample_kwargs = {
 }
 
 nn_kwargs = {
-    "hidden_dim": 512,
+    # "hidden_dim": 512,
+    "hidden_dim": 256,
     "time_dim": 256,
-    "num_layers": 6,
+    # "num_layers": 6,
+    "num_layers": 4,
     "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
-    # "num_freqs": 128,
+    "num_freqs": 128,
     "dis_emb_dim": 128,
     "ln": True,
     "smooth": False,    # embed discrete atom types via nn.Embedding
@@ -81,6 +83,15 @@ nn_kwargs = {
     "pred_l": True,
     "f_dim": 2 * dim,
     "radii_emb_dim": 128,
+    "neighbor_head": True,
+    "neighbor_hidden_dim": 128,
+    "weight_mlp_kwargs": {
+        "n_hidden": 1,
+        "n_neurons": 256,
+        "use_residual": False,
+    },
+    "composition_context": True,
+    "context_hidden_dim": 128,
 }
 
 lit_kwargs = {
@@ -116,7 +127,9 @@ def build_transform() -> PyGT.Compose:
 
 
 def build_model() -> Ambient_CSPNet:
-    return Ambient_CSPNet(**nn_kwargs)
+    return Ambient_CSPNet(**{
+        key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"
+    })
 
 
 def build_flowmap() -> JointFlowMapCSP:
@@ -320,10 +333,11 @@ def main():
         lambda_f=lit_kwargs["lambda_f"],
         beta_l=lit_kwargs["beta_l"],
         beta_f=lit_kwargs["beta_f"],
+        weight_mlp_kwargs=nn_kwargs.get("weight_mlp_kwargs"),
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_eta_{eta}_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_beta_l_{lit_kwargs['beta_l']}_beta_f_{lit_kwargs['beta_f']}_zeroinitNN"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_neighbor_composition_context_learned_weight"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
