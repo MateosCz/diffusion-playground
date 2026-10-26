@@ -172,7 +172,7 @@ class LitCSPFlowMap(L.LightningModule):
     def configure_optimizers(self):
         opt = torch.optim.AdamW(
             [*self.pi.parameters(), *self.weight_mlp.parameters()],
-            lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-12,
+            lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-2,eps=1e-8,
         )
 
         min_lr_ratio = 0.01

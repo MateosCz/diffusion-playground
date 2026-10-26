@@ -55,8 +55,8 @@ class Endpoint_Flowmap_CSP:
         with torch.no_grad():
             prediction = pi(self._update_graph(graph, f, l), t, t)
         pred_f1, pred_l1 = prediction["f"], prediction["l"]
-        lagrange_f = (1 - t)[graph.batch] * df_dt - (pred_f1.detach() - f)
-        lagrange_l = (1 - t) * dl_dt - (pred_l1.detach() - l)
+        lagrange_f = (1 - t)[graph.batch] * df_dt - (pred_f1 - f).detach()
+        lagrange_l = (1 - t) * dl_dt - (pred_l1 - l).detach()
         return {
             "f": global_mean_pool(
                 lagrange_f.square().sum(-1), graph.batch, size=graph.num_graphs,

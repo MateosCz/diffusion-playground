@@ -41,7 +41,7 @@ class VFMFlowMap:
             (torch.ones_like(t),),
             create_graph=True,
         )
-        v_tt_fake = (pi(x_st, t, t).detach() - x_st)
+        v_tt_fake = (pi(x_st, t, t) - x_st).detach()
         return (dx_dt * (self.vfm.total_time - t) - v_tt_fake).square().sum(dim=-1).mean()
 
     @torch.inference_mode()
