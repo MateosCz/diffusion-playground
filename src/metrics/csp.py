@@ -47,7 +47,9 @@ class CSPMetrics:
 
         summary["valid"] = safe_divide(sum(self.valid), len(self.valid))
         summary["match_rate"] = safe_divide(sum(self.match), len(self.match))
-        summary["rmse"] = safe_divide(sum(self.rmse), len(self.rmse))
+        # Missing matches do not contribute to either the sum or its denominator.
+        matched_rmse = [value for value in self.rmse if value is not None]
+        summary["rmse"] = safe_divide(sum(matched_rmse), len(matched_rmse)) if matched_rmse else None
 
         return summary
     
