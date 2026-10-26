@@ -25,6 +25,7 @@ class CSPMetrics:
 
         for si, st in zip(input_s, target_s):
             v, m = 0, 0
+            rmse = None
             if si is not None:
                 v = validity_structure(si)
                 if v:
@@ -37,17 +38,19 @@ class CSPMetrics:
                     m = int(rms is not None)
 
                     if rms is not None:
-                        self.rmse.append(rms[0])  # NOTE: only for valid and matching
+                        rmse = rms[0]
 
             self.match.append(m)
             self.valid.append(v)
+            self.rmse.append(rmse)  # Keep one entry per structure, including misses.
 
     def summarize(self) -> dict:
         summary = {}
 
         summary["valid"] = safe_divide(sum(self.valid), len(self.valid))
         summary["match_rate"] = safe_divide(sum(self.match), len(self.match))
-        summary["rmse"] = safe_divide(sum(self.rmse), len(self.rmse))
+        matched_rmse = [value for value in self.rmse if value is not None]
+        summary["rmse"] = safe_divide(sum(matched_rmse), len(matched_rmse)) if matched_rmse else None
 
         return summary
     
@@ -59,4 +62,5 @@ class CSPMetrics:
 
     @property
     def details(self) -> dict:
+        """Aligned per-structure records; unmatched displacements are None."""
         return {"valid": self.valid, "match": self.match, "rmse": self.rmse}

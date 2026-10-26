@@ -267,7 +267,11 @@ class CSPGenerationMetrics(L.Callback):
 
     def on_validation_epoch_end(self, trainer, pl_module):
         if not trainer.sanity_checking:
-            pl_module.log_dict({f"val/{key}": value for key, value in self.metrics.summarize().items()})
+            # Lightning needs numeric logs; keep undefined RMSE distinct from zero.
+            pl_module.log_dict({
+                f"val/{key}": float("nan") if value is None else value
+                for key, value in self.metrics.summarize().items()
+            })
 
 class SaveTrainingConfig(L.Callback):
     def __init__(self, config, checkpoint_dir):

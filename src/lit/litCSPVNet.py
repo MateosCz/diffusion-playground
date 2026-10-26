@@ -257,7 +257,8 @@ class LitCSPVNet(L.LightningModule):
 
     def on_validation_epoch_end(self):
         summary = self._val_metrics.summarize()
-        self.log_dict({f"val/{k}": v for k, v in summary.items()})
+        # Lightning cannot log None; NaN represents the undefined displacement.
+        self.log_dict({f"val/{k}": float("nan") if v is None else v for k, v in summary.items()})
         self._log_t_buckets()
 
     def on_test_epoch_start(self):
@@ -273,7 +274,7 @@ class LitCSPVNet(L.LightningModule):
 
     def on_test_epoch_end(self):
         summary = self._test_metrics.summarize()
-        self.log_dict({f"test/{k}": v for k, v in summary.items()})
+        self.log_dict({f"test/{k}": float("nan") if v is None else v for k, v in summary.items()})
     
     @torch.no_grad()
     def sample(self, batch: Data) -> Tuple[torch.Tensor, torch.Tensor]:

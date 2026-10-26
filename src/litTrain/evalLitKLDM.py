@@ -266,7 +266,7 @@ def evaluate(
         pbar.set_postfix(
             valid=f"{summary['valid']:.3f}",
             match=f"{summary['match_rate']:.3f}",
-            rmse=f"{summary['rmse']:.4f}",
+            rmse=f"{summary['rmse']:.4f}" if summary["rmse"] is not None else "None",
         )
 
     summary = metrics.summarize()
@@ -374,7 +374,8 @@ def main():
     print("\n================ CSP evaluation ================")
     print(f"  validity   : {summary['valid']:.4f}")
     print(f"  match rate : {summary['match_rate']:.4f}")
-    print(f"  rmse       : {summary['rmse']:.4f}")
+    rmse_text = f"{summary['rmse']:.4f}" if summary["rmse"] is not None else "None (no matched structures)"
+    print(f"  rmse       : {rmse_text}")
     print("===============================================")
 
 
