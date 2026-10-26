@@ -44,7 +44,7 @@ class Endpoint_Flowmap_CSP:
         return {"f": loss_f, "l": loss_l}
 
     def lagrange_loss(self, graph, s, t, pi):
-        """Per-crystal joint time residual; stop-gradient applies only to pi_tt."""
+        """Per-crystal joint time residual with a detached teacher velocity."""
         def joint_state(target_t):
             graph_st = self.Xst(graph, s, target_t, pi)
             return graph_st.x, graph_st.l

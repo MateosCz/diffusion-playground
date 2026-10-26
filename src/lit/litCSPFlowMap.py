@@ -20,6 +20,7 @@ class LitCSPFlowMap(L.LightningModule):
         ema_decay:float = 0.999,
         ema_start: int = 100,
         weight_mlp_kwargs: dict | None = None,
+        use_weight_mlp: bool = True,
     ):
         super().__init__()
         if not 0 < eta <= 1:
@@ -36,6 +37,7 @@ class LitCSPFlowMap(L.LightningModule):
         self.lambda_l = lambda_l
         self.beta_f = beta_f
         self.beta_l = beta_l
+        self.use_weight_mlp = use_weight_mlp
         nn.init.normal_(
                 self.pi.out_f[-1].weight,
                 mean=0.0,
@@ -78,6 +80,8 @@ class LitCSPFlowMap(L.LightningModule):
 
     def weighted_loss(self, losses, s, t):
         """Flow Maps log weights, one column each for coordinates and lattice."""
+        if not self.use_weight_mlp:
+            return {key: losses[key].mean() for key in ("f", "l")}
         weight = self.weight_mlp(torch.cat([s, t], dim=-1))
         return {
             key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
@@ -108,6 +112,8 @@ class LitCSPFlowMap(L.LightningModule):
         off_diagonal = Batch.from_data_list(graphs[n_diagonal:]).to(batch.x.device)
 
         t, graph_t, target = self.sample_training_pair(diagonal)
+        if stage == "train":
+            self._loss_spike_inputs = {"diagonal": (target, graph_t, t)}
         tangent = self.flow_map.tangent_loss(target, graph_t, t, self.pi)
         weighted_tangent = self.weighted_loss(tangent, t, t)
 
@@ -116,6 +122,8 @@ class LitCSPFlowMap(L.LightningModule):
         b = self.rg_vfm.sample_time(off_diagonal.l)
         s, t = torch.minimum(a, b), torch.maximum(a, b)
         _, graph_s, _ = self.sample_training_pair(off_diagonal, t=s)
+        if stage == "train":
+            self._loss_spike_inputs["off_diagonal"] = (graph_s, s, t)
         lagrange = self.flow_map.lagrange_loss(graph_s, s, t, self.pi)
         weighted_lagrange = self.weighted_loss(lagrange, s, t)
         loss = (
@@ -129,6 +137,10 @@ class LitCSPFlowMap(L.LightningModule):
                 f"{stage}/tangent_loss_l": tangent["l"].mean(),
                 f"{stage}/lagrange_loss_f": lagrange["f"].mean(),
                 f"{stage}/lagrange_loss_l": lagrange["l"].mean(),
+                f"{stage}/tangent_contribution_f": self.lambda_f * weighted_tangent["f"],
+                f"{stage}/tangent_contribution_l": self.lambda_l * weighted_tangent["l"],
+                f"{stage}/lagrange_contribution_f": self.lambda_f * self.beta_f * weighted_lagrange["f"],
+                f"{stage}/lagrange_contribution_l": self.lambda_l * self.beta_l * weighted_lagrange["l"],
             },
             on_step=stage == "train", on_epoch=True,
             prog_bar=stage in ("train", "val"), batch_size=batch.num_graphs,

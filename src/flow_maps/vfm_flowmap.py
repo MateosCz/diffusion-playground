@@ -28,9 +28,9 @@ class VFMFlowMap:
         return self.vfm.loss(pi(xt, t, t), x1, t=t).mean()
     
     def lagrange_loss(self, xs, s, t, pi: nn.Module):
-        """Match (T-t) * dX_st/dt to stop_grad(pi_tt(X_st)) - X_st.
+        """Match (T-t) * dX_st/dt to stop_grad(pi_tt(X_st) - X_st).
 
-        Stop-gradient applies only to pi_tt; X_st remains differentiable.
+        Stop-gradient applies to the complete teacher displacement.
         """
         s = self.vfm.batch_time(s, xs)
         t = self.vfm.batch_time(t, xs)
