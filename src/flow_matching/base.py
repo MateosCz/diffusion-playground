@@ -187,6 +187,7 @@ class BaseFlowMatching(ABC, nn.Module):
         distribution: TimeDistribution = "uniform",
         t_min: float = 0.0,
         constant_time: float = 0.5,
+        t_max_clip: float = 1.0,
         t: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Sample one time per batch item, returned as shape ``(batch, 1)``."""
@@ -198,6 +199,7 @@ class BaseFlowMatching(ABC, nn.Module):
 
         if t is not None:
             times = self.batch_time(t, reference)
+            times = torch.clamp(times, min=t_min, max=t_max_clip)
         elif distribution == "constant":
             times = torch.full(
                 (reference.shape[0], 1),
@@ -215,7 +217,7 @@ class BaseFlowMatching(ABC, nn.Module):
                 unit = unit.square()
             elif distribution != "uniform":
                 raise ValueError(f"unknown time distribution: {distribution}")
-            times = t_min + unit * (t_max - t_min)
+            times = t_min + unit * (t_max_clip - t_min)
 
         if torch.any(times < 0) or torch.any(times >= self.total_time):
             raise ValueError(f"training times must be in [0, {self.total_time})")
