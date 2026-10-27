@@ -1,0 +1,142 @@
+/home/jizho/projects/diffusion-playground/src/dataLib/realCrystal.py:30: UserWarning: Weights only load failed. Please file an issue to make `torch.load(weights_only=True)` compatible in your case. Please use `torch.serialization.add_safe_globals([torch_geometric.data.data.DataTensorAttr])` to allowlist this global.
+  return fs.torch_load(path)
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python /home/jizho/projects/diffusion-playground/src/litTra ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/jizho/.netrc.
+wandb: Currently logged in as: zjccharles to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 8l0snbqo
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in wandb_logs/wandb/run-20261026_001832-8l0snbqo
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run ACSPVNet_FlowMap_mp-20_neighbor_composition_context_learned_weight
+wandb: ⭐️ View project at https://wandb.ai/zjccharles/diffusion-playground
+wandb: 🚀 View run at https://wandb.ai/zjccharles/diffusion-playground/runs/8l0snbqo
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [3]
+Loading `train_dataloader` to estimate number of stepping batches.
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+
+  | Name       | Type                                      | Params | Mode  | FLOPs
+-----------------------------------------------------------------------------------------
+0 | pi         | Ambient_CSPNet                            | 11.4 M | train | 0    
+1 | rg_vfm     | RiemannianGaussianVariationalFlowMatching | 0      | train | 0    
+2 | l_vfm      | VFM                                       | 0      | train | 0    
+3 | weight_mlp | Weight_MLP                                | 67.1 K | train | 0    
+4 | ema_pi     | AveragedModel                             | 11.4 M | train | 0    
+-----------------------------------------------------------------------------------------
+11.4 M    Trainable params
+11.4 M    Non-trainable params
+22.8 M    Total params
+91.128    Total estimated model params size (MB)
+157       Modules in train mode
+0         Modules in eval mode
+0         Total Flops
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/lattice.py:1109: RuntimeWarning: invalid value encountered in divide
+  u[s - 1, : (s - 1)] = np.dot(a[:, s - 1].T, b[:, : (s - 1)]) / m[: (s - 1)]
+/home/jizho/projects/diffusion-playground/src/metrics/common.py:28: UserWarning: In the structure validity the following error occurred: SVD did not converge in Linear Least Squares
+  warnings.warn(f"In the structure validity the following error occurred: {e}")
+/home/jizho/projects/diffusion-playground/src/metrics/common.py:28: UserWarning: In the structure validity the following error occurred: Python int too large to convert to C long
+  warnings.warn(f"In the structure validity the following error occurred: {e}")
+An ZeroDivisionError was raised with message:             float division, saved checkpoint to /home/jizho/projects/diffusion-playground/checkpoints/20261026_001819_cspFlowMap/ACSPVNet_FlowMap_mp-20_neighbor_composition_context_learned_weight/last.ckpt
+wandb: updating run metadata
+wandb: uploading wandb-summary.json; uploading config.yaml; uploading output.log
+wandb: uploading history steps 4290-4291, summary, console lines 19-20
+wandb: 
+wandb: Run history:
+wandb:                       epoch ▁▁▁▁▂▂▂▂▂▂▃▃▃▄▄▄▄▄▄▄▅▅▅▅▅▅▆▆▆▆▆▆▇▇▇▇▇▇▇█
+wandb: train/lagrange_loss_f_epoch ▁▁▁█▁▁▁▁▁▁▁▁▁▁▆▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:  train/lagrange_loss_f_step ▁▁▁▁▁▁▂▁▁▃▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: train/lagrange_loss_l_epoch ▁▁▁▁▅▁▃▁▁▂▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▁▂▂▁█▁▁▁▁▁▁▁▁▁
+wandb:  train/lagrange_loss_l_step ▇▁▁▁█▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:  train/tangent_loss_f_epoch ▂▁▁█▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:   train/tangent_loss_f_step ▃▂▂▂▂▂█▂▂▁▁▂▂▁▁▁▂▂▁▂▂▁▂▁▂▁▂▂▂▁▁▁▂▁▁▂▂▁▂▁
+wandb:  train/tangent_loss_l_epoch ▁▁▁▁▁█▄▁▂▁▁▆▁▁▂▁▁▁▃▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:   train/tangent_loss_l_step ▁▁▁▁▄▆▁▄▁▂▃▁▁▁▁▁▁▁▁▁▁▁▁▄▅▁▁█▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:      train/total_loss_epoch ▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:                         +12 ...
+wandb: 
+wandb: Run summary:
+wandb:                       epoch 299
+wandb: train/lagrange_loss_f_epoch 0.06215
+wandb:  train/lagrange_loss_f_step 0.01407
+wandb: train/lagrange_loss_l_epoch 0.02157
+wandb:  train/lagrange_loss_l_step 0.03781
+wandb:  train/tangent_loss_f_epoch 3.74881
+wandb:   train/tangent_loss_f_step 3.7744
+wandb:  train/tangent_loss_l_epoch 1.92381
+wandb:   train/tangent_loss_l_step 2.62752
+wandb:      train/total_loss_epoch 1.92825
+wandb:                         +12 ...
+wandb: 
+wandb: 🚀 View run ACSPVNet_FlowMap_mp-20_neighbor_composition_context_learned_weight at: https://wandb.ai/zjccharles/diffusion-playground/runs/8l0snbqo
+wandb: ⭐️ View project at: https://wandb.ai/zjccharles/diffusion-playground
+wandb: Synced 5 W&B file(s), 4 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: wandb_logs/wandb/run-20261026_001832-8l0snbqo/logs
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitCSPFlowMap.py", line 416, in <module>
+    main()
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitCSPFlowMap.py", line 405, in main
+    trainer.fit(
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 584, in fit
+    call._call_and_handle_interrupt(
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 49, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 630, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path, weights_only=weights_only)
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1079, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1123, in _run_stage
+    self.fit_loop.run()
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 217, in run
+    self.advance()
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 469, in advance
+    self.epoch_loop.run(self._data_fetcher)
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 154, in run
+    self.on_advance_end(data_fetcher)
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 406, in on_advance_end
+    self.val_loop.run()
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/utilities.py", line 179, in _decorator
+    return loop_run(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 146, in run
+    self._evaluation_step(batch, batch_idx, dataloader_idx, dataloader_iter)
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 455, in _evaluation_step
+    call._call_callback_hooks(trainer, hook_name, output, *hook_kwargs.values())
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 228, in _call_callback_hooks
+    fn(trainer, trainer.lightning_module, *args, **kwargs)
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitCSPFlowMap.py", line 213, in on_validation_batch_end
+    aligned = plot_matcher.get_s2_like_s1(gt, generated)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/structure_matcher.py", line 1218, in get_s2_like_s1
+    trans = self.get_transformation(s1, s2)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/structure_matcher.py", line 1183, in get_transformation
+    match = self._strict_match(s1, s2, fu=fu, s1_supercell=False, use_rms=True, break_on_match=False)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/structure_matcher.py", line 805, in _strict_match
+    for s1fc, s2fc, avg_l, sc_m in self._get_supercells(struct1, struct2, fu, s1_supercell):
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/structure_matcher.py", line 530, in _get_supercells
+    for x in sc_generator(struct2, struct1):
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/structure_matcher.py", line 513, in sc_generator
+    for latt, sc_m in self._get_lattices(s2.lattice, s1, fu):
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/structure_matcher.py", line 493, in _get_lattices
+    for latt, _, scale_m in lattices:
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/lattice.py", line 965, in find_all_mappings
+    frac, dist, _, _ = self.get_points_in_sphere(  # type: ignore[misc]
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/lattice.py", line 1426, in get_points_in_sphere
+    _, indices, images, distances = find_points_in_spheres(
+                                    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "src/pymatgen/optimization/neighbors.pyx", line 155, in pymatgen.optimization.neighbors.find_points_in_spheres
+  File "src/pymatgen/optimization/neighbors.pyx", line 572, in pymatgen.optimization.neighbors.get_frac_coords
+  File "src/pymatgen/optimization/neighbors.pyx", line 615, in pymatgen.optimization.neighbors.matrix_inv
+ZeroDivisionError: float division

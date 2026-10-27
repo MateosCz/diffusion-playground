@@ -337,8 +337,8 @@ class Ambient_CSPNet(nn.Module):
 
         if self.pred_l:
             graph_features = scatter(node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0])
-            # if self.composition_context:
-            #     graph_features = graph_features + context
+            if self.composition_context:
+                graph_features = graph_features + context
             out_l = self.out_l(graph_features)
             out_l = out_l.view(-1, 6)
             out["l"] = out_l + l

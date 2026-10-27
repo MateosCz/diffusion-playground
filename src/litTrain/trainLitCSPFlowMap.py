@@ -85,31 +85,23 @@ nn_kwargs = {
     "pred_l": True,
     "f_dim": 2 * dim,
     "radii_emb_dim": 128,
-    "neighbor_head": False,
+    "neighbor_head": True,
     "neighbor_hidden_dim": 128,
     "weight_mlp_kwargs": {
         "n_hidden": 1,
         "n_neurons": 256,
         "use_residual": False,
     },
-    "composition_context": False,
+    "composition_context": True,
     "context_hidden_dim": 128,
 }
 
 lit_kwargs = {
-<<<<<<< HEAD
     "lambda_l": 0.05,
     "lambda_f": 1.0,
     "beta_l": 0.25,
-    "beta_f": 0.05,
-=======
-    "use_weight_mlp": True,
-    "lambda_l": 1.0,
-    "lambda_f": 1.5,
-    "beta_l": 3.0,
-    "beta_f": 3.0,
->>>>>>> 60d1e090e1e3fecf0fdf3963bb582e6256119ced
-
+    "beta_f": 0.25,
+    "use_weight_mlp": False,
 }
 
 train_kwargs = {
@@ -394,7 +386,7 @@ def main():
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_neighbor_composition_context_learned_weight"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_neighbor_composition_context_fix_weight"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",

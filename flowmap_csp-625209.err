@@ -1,0 +1,40 @@
+/home/jizho/projects/diffusion-playground/src/dataLib/realCrystal.py:30: UserWarning: Weights only load failed. Please file an issue to make `torch.load(weights_only=True)` compatible in your case. Please use `torch.serialization.add_safe_globals([torch_geometric.data.data.DataTensorAttr])` to allowlist this global.
+  return fs.torch_load(path)
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python /home/jizho/projects/diffusion-playground/src/litTra ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+You are using a CUDA device ('NVIDIA GeForce RTX 4070 Ti SUPER') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/jizho/.netrc.
+wandb: Currently logged in as: zjccharles to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 1lljjjfw
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in wandb_logs/wandb/run-20261026_114706-1lljjjfw
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run ACSPVNet_FlowMap_mp-20_no_distillation
+wandb: ⭐️ View project at https://wandb.ai/zjccharles/diffusion-playground
+wandb: 🚀 View run at https://wandb.ai/zjccharles/diffusion-playground/runs/1lljjjfw
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+Loading `train_dataloader` to estimate number of stepping batches.
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+
+  | Name       | Type                                      | Params | Mode  | FLOPs
+-----------------------------------------------------------------------------------------
+0 | pi         | Ambient_CSPNet                            | 11.1 M | train | 0    
+1 | rg_vfm     | RiemannianGaussianVariationalFlowMatching | 0      | train | 0    
+2 | l_vfm      | VFM                                       | 0      | train | 0    
+3 | weight_mlp | Weight_MLP                                | 67.1 K | train | 0    
+4 | ema_pi     | AveragedModel                             | 11.1 M | train | 0    
+-----------------------------------------------------------------------------------------
+11.2 M    Trainable params
+11.1 M    Non-trainable params
+22.3 M    Total params
+89.005    Total estimated model params size (MB)
+141       Modules in train mode
+0         Modules in eval mode
+0         Total Flops
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/pymatgen/core/lattice.py:1109: RuntimeWarning: invalid value encountered in divide
+  u[s - 1, : (s - 1)] = np.dot(a[:, s - 1].T, b[:, : (s - 1)]) / m[: (s - 1)]
+/home/jizho/projects/diffusion-playground/src/metrics/common.py:28: UserWarning: In the structure validity the following error occurred: SVD did not converge in Linear Least Squares
+  warnings.warn(f"In the structure validity the following error occurred: {e}")
