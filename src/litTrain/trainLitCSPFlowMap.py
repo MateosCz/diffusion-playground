@@ -71,11 +71,11 @@ sample_kwargs = {
 }
 
 nn_kwargs = {
-    # "hidden_dim": 512,
-    "hidden_dim": 256,
+    "hidden_dim": 512,
+    # "hidden_dim": 256,
     "time_dim": 256,
-    # "num_layers": 6,
-    "num_layers": 4,
+    "num_layers": 6,
+    # "num_layers": 4,
     "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
     "num_freqs": 128,
     "dis_emb_dim": 128,
@@ -97,11 +97,11 @@ nn_kwargs = {
 }
 
 lit_kwargs = {
-    "use_weight_mlp": True,
-    "lambda_l": 1.0,
-    "lambda_f": 1.5,
-    "beta_l": 3.0,
-    "beta_f": 3.0,
+    "use_weight_mlp": False,
+    "lambda_l": 0.05,
+    "lambda_f": 1.0,
+    "beta_l": 0.25,
+    "beta_f": 0.25,
 
 }
 
