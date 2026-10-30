@@ -97,7 +97,7 @@ nn_kwargs = {
 }
 
 lit_kwargs = {
-    "use_weight_mlp": False,
+    "use_weight_mlp": True,
     "lambda_l": 0.05,
     "lambda_f": 1.0,
     "beta_l": 0.1,
