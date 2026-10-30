@@ -172,8 +172,8 @@ class LitCSPFlowMap(L.LightningModule):
             self.ema_pi.update_parameters(self.pi)
 
     @torch.inference_mode()
-    def sample(self, batch, n_steps=1):
-        """Draw priors using the crystal template, then sample from time 0 to 1."""
+    def sample(self, batch, n_steps=1, *, pc=True):
+        """Sample from 0 to 1, with optional Langevin correction."""
         f0 = self.rg_vfm.sample_prior(
             (batch.num_nodes, self.rg_vfm.model_dim),
             device=batch.x.device, dtype=batch.x.dtype,
@@ -188,7 +188,7 @@ class LitCSPFlowMap(L.LightningModule):
         else:
             pi = self.pi
         # return self.flow_map.sample_euler(graph0, pi, n_steps=n_steps, t_max_clip=0.99, pc=True, pc_steps=2)
-        return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=True, pc_steps=3)
+        return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=pc, pc_steps=3)
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(
