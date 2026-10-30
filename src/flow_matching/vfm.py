@@ -82,20 +82,20 @@ class VFM(nn.Module):
         self, prediction: torch.Tensor, target: torch.Tensor,
         *, t: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Mean squared endpoint error, optionally weighted by ``1/(1-t)^2``."""
+        """Per-sample endpoint MSE, optionally weighted by ``1/(1-t)^2``."""
         self._validate_state(prediction, "prediction")
         BaseFlowMatching._validate_pair(prediction, target)
         times = self.batch_time(0.0 if t is None else t, prediction).squeeze(-1)
         if torch.any(times < 0) or torch.any(times >= 1):
             raise ValueError("loss times must be in [0, 1)")
-        errors = (prediction - target).square().sum(dim=-1)
+        errors = (prediction - target).square().mean(dim=-1)
         if self.is_loss_weighted:
             weight = 1.0/(1 - times).square()
             if self.max_loss_weight is not None:
                 weight = weight.clamp_max(self.max_loss_weight)
             errors = weight * errors
             
-        return errors.mean()
+        return errors
 
     def _validate_state(self, x: torch.Tensor, name: str) -> None:
         BaseFlowMatching._validate_points(x, name)

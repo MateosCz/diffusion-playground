@@ -34,18 +34,18 @@ class Endpoint_Flowmap_CSP:
         return self._update_graph(graph, f, l)
 
     def tangent_loss(self, graph1, grapht, t, pi):
-        """Return separate endpoint regression losses at s=t."""
+        """Return coordinate and lattice endpoint losses per crystal at s=t."""
         prediction = pi(grapht, t, t)
         pred_f, pred_l = prediction["f"], prediction["l"]
         loss_f = self.f_flowmap.vfm.loss(
             pred_f, graph1.x, t=t[grapht.batch], reduction="none",
         )
-        loss_f = global_mean_pool(loss_f, grapht.batch, size=grapht.num_graphs).mean()
+        loss_f = global_mean_pool(loss_f, grapht.batch, size=grapht.num_graphs)
         loss_l = self.l_flowmap.vfm.loss(pred_l, graph1.l, t=t)
         return {"f": loss_f, "l": loss_l}
 
     def lagrange_loss(self, graph, s, t, pi):
-        """Joint time derivative; stop-gradient applies only to pi_tt."""
+        """Per-crystal joint time residual with a detached teacher velocity."""
         def joint_state(target_t):
             graph_st = self.Xst(graph, s, target_t, pi)
             return graph_st.x, graph_st.l
@@ -61,8 +61,8 @@ class Endpoint_Flowmap_CSP:
         return {
             "f": global_mean_pool(
                 lagrange_f.square().sum(-1), graph.batch, size=graph.num_graphs,
-            ).mean(),
-            "l": lagrange_l.square().sum(-1).mean(),
+            ),
+            "l": lagrange_l.square().mean(-1),
         }
 
     @torch.inference_mode()
