@@ -4,32 +4,57 @@ from torch_geometric.utils import scatter
 from typing import Callable
 from src.nn.scoreNNBlock import SinEmbedding, FourierEmbedding
 from torch_geometric.data import Data
+import numpy as np
 
 class Weight_MLP(nn.Module):
-    def __init__(
-        self, input_dim, n_hidden, n_neurons, output_dim, act, use_residual=False
-    ):
+    """CFM log weights from shared Fourier features and an MP output layer."""
+
+    def __init__(self, sin_emb_dim=256, output_dim=1):
         super().__init__()
-        self.act = act
-        self.use_residual = use_residual
+        self.time_emb = MP_Fourier(embedding_dim=sin_emb_dim)
+        self.output_layer = MP_Linear(sin_emb_dim, output_dim)
 
-        self.input_layer = nn.Linear(input_dim, n_neurons)
-        self.hidden_layers = nn.ModuleList(
-            [nn.Linear(n_neurons, n_neurons) for _ in range(n_hidden)]
-        )
-        self.output_layer = nn.Linear(n_neurons, output_dim)
+    def forward(self, s, t):
+        # Each crystal has one scalar time, stored as (B,) or (B, 1).
+        embed_s = self.time_emb(s.reshape(-1))
+        embed_t = self.time_emb(t.reshape(-1))
+        return self.output_layer(mp_sum(embed_s, embed_t))
 
-    def forward(self, x: torch.Tensor):
-        x = self.act(self.input_layer(x))
 
-        for layer in self.hidden_layers:
-            if self.use_residual:
-                x = x + layer(x)
-            else:
-                x = layer(x)
-            x = self.act(x)
+class MP_Linear(nn.Module):
+    """Bias-free linear map with unit-L2 weight rows for magnitude preservation."""
 
-        return self.output_layer(x)
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(out_features, in_features))
+
+    def forward(self, x):
+        weight = nn.functional.normalize(self.weight, dim=-1, eps=1e-4)
+        return nn.functional.linear(x, weight)
+
+
+#----------------------------------------------------------------------------
+# Magnitude-preserving Fourier features (Equation 75).
+
+class MP_Fourier(nn.Module):
+    def __init__(self, embedding_dim=256):
+        super().__init__()
+        self.frequencies = nn.Parameter(torch.randn(embedding_dim), requires_grad=False)
+        self.phases      = nn.Parameter(torch.rand(embedding_dim), requires_grad=False)
+
+    def forward(self, a):
+        b = (2 * np.pi) * (a[:, None] * self.frequencies[None, :] + self.phases[None, :])
+        b = torch.cos(b) * np.sqrt(2.)
+        return b
+
+#----------------------------------------------------------------------------
+# Magnitude-preserving sum (Equation 88).
+
+def mp_sum(a, b, t=0.5):
+    return a.lerp(b, t) / np.sqrt((1 - t) ** 2 + t ** 2)
+#----------------------------------------------------------------------------
+
+
 
 class Ambient_CSPLayer(nn.Module):
     def __init__(

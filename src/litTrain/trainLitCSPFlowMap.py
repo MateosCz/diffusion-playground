@@ -88,9 +88,7 @@ nn_kwargs = {
     "neighbor_head": True,
     "neighbor_hidden_dim": 128,
     "weight_mlp_kwargs": {
-        "n_hidden": 1,
-        "n_neurons": 256,
-        "use_residual": False,
+        "sin_emb_dim": 256,
     },
     "composition_context": True,
     "context_hidden_dim": 128,

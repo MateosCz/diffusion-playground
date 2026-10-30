@@ -48,15 +48,9 @@ class LitCSPFlowMap(L.LightningModule):
         nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.pi.out_l.bias)
 
-        weight_mlp_kwargs = {
-            "n_hidden": 1, "n_neurons": pi.out_l.in_features,
-            "use_residual": False, **(weight_mlp_kwargs or {}),
-        }
         self.weight_mlp = Weight_MLP(
-            input_dim=2, output_dim=2, act=nn.GELU(), **weight_mlp_kwargs,
+            output_dim=2, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
         )
-        nn.init.zeros_(self.weight_mlp.output_layer.weight)
-        nn.init.zeros_(self.weight_mlp.output_layer.bias)
 
         self.warmup_steps = warmup_steps
         if with_ema:
@@ -82,7 +76,7 @@ class LitCSPFlowMap(L.LightningModule):
         """Flow Maps log weights, one column each for coordinates and lattice."""
         if not self.use_weight_mlp:
             return {key: losses[key].mean() for key in ("f", "l")}
-        weight = self.weight_mlp(torch.cat([s, t], dim=-1))
+        weight = self.weight_mlp(s, t)
         return {
             key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
             for i, key in enumerate(("f", "l"))
