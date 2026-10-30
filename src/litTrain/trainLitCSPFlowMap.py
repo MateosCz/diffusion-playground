@@ -391,7 +391,7 @@ def main():
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_neighbor_composition_context_learned_weight"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_weight"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",

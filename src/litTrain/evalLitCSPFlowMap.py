@@ -32,6 +32,7 @@ from src.litTrain.trainLitCSPFlowMap import (
     build_model,
     build_flowmap,
     FractionalPositions,
+    lit_kwargs as default_lit_kwargs,
     sample_kwargs as default_sample_kwargs,
 )
 from src.lit.litCSPFlowMap import LitCSPFlowMap
@@ -113,6 +114,7 @@ def load_lit_model(ckpt_path: str, device: torch.device) -> LitCSPFlowMap:
         ckpt_path,
         pi=model,
         flow_map=flow_map,
+        use_weight_mlp=default_lit_kwargs["use_weight_mlp"],
         map_location=device,
         weights_only=False
     )

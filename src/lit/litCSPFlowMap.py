@@ -47,10 +47,12 @@ class LitCSPFlowMap(L.LightningModule):
 
         nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.pi.out_l.bias)
-
-        self.weight_mlp = Weight_MLP(
-            output_dim=2, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
-        )
+        if self.use_weight_mlp:
+            self.weight_mlp = Weight_MLP(
+                output_dim=2, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+            )
+        else:
+            self.weight_mlp = None
 
         self.warmup_steps = warmup_steps
         if with_ema:
@@ -66,7 +68,13 @@ class LitCSPFlowMap(L.LightningModule):
 
         self.save_hyperparameters(ignore=["pi", "flow_map", "rg_vfm", "l_vfm"])
 
-        
+    def on_load_checkpoint(self, checkpoint):
+        """Ignore optional loss-weight parameters when their network is disabled."""
+        if not self.use_weight_mlp:
+            state_dict = checkpoint["state_dict"]
+            for key in list(state_dict):
+                if key.startswith("weight_mlp."):
+                    del state_dict[key]
 
     def forward(self, graph, s, t):
         """Return the coordinate and lattice endpoints under keys f/l."""
@@ -120,10 +128,16 @@ class LitCSPFlowMap(L.LightningModule):
             self._loss_spike_inputs["off_diagonal"] = (graph_s, s, t)
         lagrange = self.flow_map.lagrange_loss(graph_s, s, t, self.pi)
         weighted_lagrange = self.weighted_loss(lagrange, s, t)
-        loss = (
-            self.lambda_f * (weighted_tangent["f"] + self.beta_f * weighted_lagrange["f"])
-            + self.lambda_l * (weighted_tangent["l"] + self.beta_l * weighted_lagrange["l"])
-        )
+        if self.use_weight_mlp:
+            loss = (
+                self.lambda_f * (weighted_tangent["f"] + weighted_lagrange["f"])
+                + self.lambda_l * (weighted_tangent["l"] + weighted_lagrange["l"])
+            )
+        else:
+            loss = (
+                self.lambda_f * (weighted_tangent["f"] + self.beta_f * weighted_lagrange["f"])
+                + self.lambda_l * (weighted_tangent["l"] + self.beta_l * weighted_lagrange["l"])
+            )
         self.log_dict(
             {
                 f"{stage}/total_loss": loss,
@@ -133,8 +147,8 @@ class LitCSPFlowMap(L.LightningModule):
                 f"{stage}/lagrange_loss_l": lagrange["l"].mean(),
                 f"{stage}/tangent_contribution_f": self.lambda_f * weighted_tangent["f"],
                 f"{stage}/tangent_contribution_l": self.lambda_l * weighted_tangent["l"],
-                f"{stage}/lagrange_contribution_f": self.lambda_f * self.beta_f * weighted_lagrange["f"],
-                f"{stage}/lagrange_contribution_l": self.lambda_l * self.beta_l * weighted_lagrange["l"],
+                f"{stage}/lagrange_contribution_f": self.lambda_f * (1.0 if self.use_weight_mlp else self.beta_f) * weighted_lagrange["f"],
+                f"{stage}/lagrange_contribution_l": self.lambda_l * (1.0 if self.use_weight_mlp else self.beta_l) * weighted_lagrange["l"],
             },
             on_step=stage == "train", on_epoch=True,
             prog_bar=stage in ("train", "val"), batch_size=batch.num_graphs,
@@ -174,11 +188,11 @@ class LitCSPFlowMap(L.LightningModule):
         else:
             pi = self.pi
         # return self.flow_map.sample_euler(graph0, pi, n_steps=n_steps, t_max_clip=0.99, pc=True, pc_steps=2)
-        return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=True, pc_steps=1)
+        return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=True, pc_steps=3)
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(
-            [*self.pi.parameters(), *self.weight_mlp.parameters()],
+            [*self.pi.parameters(), *(self.weight_mlp.parameters() if self.use_weight_mlp else [])], # weight_mlp parameters are only used if use_weight_mlp is True
             lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-12,
         )
 
