@@ -86,8 +86,8 @@ nn_kwargs = {
 }
 
 lit_kwargs = {
-    "lambda_l": 1.0,
-    "lambda_f": 1.5,
+    "lambda_l": 0.05,
+    "lambda_f": 1.0,
     "beta_l": 3.0,
     "beta_f": 3.0,
 

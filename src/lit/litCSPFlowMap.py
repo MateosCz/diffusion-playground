@@ -145,7 +145,7 @@ class LitCSPFlowMap(L.LightningModule):
         else:
             pi = self.pi
         # return self.flow_map.sample_euler(graph0, pi, n_steps=n_steps, t_max_clip=0.99, pc=True, pc_steps=2)
-        return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=True, pc_steps=3)
+        return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=True, pc_steps=1)
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(self.pi.parameters(), lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-12)
