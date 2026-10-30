@@ -24,15 +24,13 @@ class VFMFlowMap:
         return x_s + (t - s) * (pi(x_s, s, t) - x_s) / (self.vfm.total_time - s)
 
     def tangent_loss(self,x1, xt, t, pi: nn.Module):
-        """tangent loss for the flow map
-        E[||(pi_t,t(x_t) - x_1)/(1-t)||^2]
-        """
-        return self.vfm.loss(pi(xt, t, t), x1, t=t)
+        """Batch-averaged endpoint regression loss at s=t."""
+        return self.vfm.loss(pi(xt, t, t), x1, t=t).mean()
     
     def lagrange_loss(self, xs, s, t, pi: nn.Module):
-        """Match (T-t) * dX_st/dt to stop_grad(pi_tt(X_st)) - X_st.
+        """Match (T-t) * dX_st/dt to stop_grad(pi_tt(X_st) - X_st).
 
-        Stop-gradient applies only to pi_tt; X_st remains differentiable.
+        Stop-gradient applies to the complete teacher displacement.
         """
         s = self.vfm.batch_time(s, xs)
         t = self.vfm.batch_time(t, xs)
@@ -43,7 +41,7 @@ class VFMFlowMap:
             (torch.ones_like(t),),
             create_graph=True,
         )
-        v_tt_fake = (pi(x_st, t, t).detach() - x_st)
+        v_tt_fake = (pi(x_st, t, t) - x_st).detach()
         return (dx_dt * (self.vfm.total_time - t) - v_tt_fake).square().sum(dim=-1).mean()
 
     @torch.inference_mode()

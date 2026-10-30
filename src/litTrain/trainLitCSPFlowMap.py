@@ -2,7 +2,9 @@
 
 import json
 import os
+import warnings
 from datetime import datetime
+from pathlib import Path
 
 import torch
 import torch_geometric.transforms as PyGT
@@ -71,8 +73,10 @@ sample_kwargs = {
 nn_kwargs = {
     "hidden_dim": 512,
     # "hidden_dim": 256,
+    # "hidden_dim": 256,
     "time_dim": 256,
     "num_layers": 6,
+    # "num_layers": 4,
     # "num_layers": 4,
     "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
     # "num_freqs": 128,
@@ -83,9 +87,17 @@ nn_kwargs = {
     "pred_l": True,
     "f_dim": 2 * dim,
     "radii_emb_dim": 128,
+    # "neighbor_head": True,
+    # "neighbor_hidden_dim": 128,
+    "weight_mlp_kwargs": {
+        "sin_emb_dim": 256,
+    },
+    # "composition_context": True,
+    # "context_hidden_dim": 128,
 }
 
 lit_kwargs = {
+    "use_weight_mlp": False,
     "lambda_l": 0.05,
     "lambda_f": 1.0,
     "beta_l": 0.1,
@@ -118,7 +130,9 @@ def build_transform() -> PyGT.Compose:
 
 
 def build_model() -> Ambient_CSPNet:
-    return Ambient_CSPNet(**nn_kwargs)
+    return Ambient_CSPNet(**{
+        key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"
+    })
 
 
 def build_flowmap() -> JointFlowMapCSP:
@@ -135,6 +149,39 @@ class FractionalPositions:
     @staticmethod
     def invert_one(positions):
         return positions % 1.0
+
+
+class LossSpikeCheckpoint(L.Callback):
+    """Keep the largest single-device loss and its sampled inputs before backward."""
+
+    def __init__(self, threshold=10.0):
+        super().__init__()
+        self.max_loss = float(threshold)
+
+    def on_before_backward(self, trainer, pl_module, loss):
+        # save_checkpoint can be collective; this diagnostic supports one device.
+        if trainer.world_size != 1:
+            return
+        value = float(loss.detach().cpu())
+        if not value > self.max_loss:
+            return
+        directory = Path(trainer.checkpoint_callback.dirpath)
+        directory.mkdir(parents=True, exist_ok=True)
+        inputs = {
+            key: tuple(item.clone().detach().cpu() for item in items)
+            for key, items in pl_module._loss_spike_inputs.items()
+        }
+        self.max_loss = value
+        trainer.save_checkpoint(str(directory / "loss_spike.ckpt"))
+        torch.save(
+            {
+                "epoch": trainer.current_epoch,
+                "global_step": trainer.global_step,
+                "loss": value,
+                "inputs": inputs,
+            },
+            directory / "loss_spike_inputs.pt",
+        )
 
 
 class CSPGenerationMetrics(L.Callback):
@@ -185,7 +232,9 @@ class CSPGenerationMetrics(L.Callback):
 
         # sample pairs of generated and target structures, make sure the orders are same
         pairs = [
-            (s, t) for s, t in zip(structures, targets) if s is not None
+            (s, t) for s, t, valid in zip(
+                structures, targets, self.metrics.valid[-len(structures):],
+            ) if s is not None and valid
         ]
         if not pairs:
             return
@@ -199,7 +248,16 @@ class CSPGenerationMetrics(L.Callback):
 
         aligned_pairs = []
         for generated, gt in pairs:
-            aligned = plot_matcher.get_s2_like_s1(gt, generated)
+            try:
+                aligned = plot_matcher.get_s2_like_s1(gt, generated)
+            except (ZeroDivisionError, np.linalg.LinAlgError, ValueError) as error:
+                warnings.warn(
+                    f"Skipping plot alignment at epoch {pl_module.current_epoch}, "
+                    f"batch {batch_idx}: {type(error).__name__}: {error}; "
+                    f"volume={generated.volume}, lattice={generated.lattice.parameters}",
+                    RuntimeWarning,
+                )
+                continue
 
             if aligned is not None:
 
@@ -215,6 +273,8 @@ class CSPGenerationMetrics(L.Callback):
                 (aligned if aligned is not None else generated, gt)
             )
 
+        if not aligned_pairs:
+            return
         pairs = aligned_pairs
         plot_pairs = pairs[:num_images]
 
@@ -269,7 +329,7 @@ class CSPGenerationMetrics(L.Callback):
 
     def on_validation_epoch_end(self, trainer, pl_module):
         if not trainer.sanity_checking:
-            # Lightning needs numeric logs; keep undefined RMSE distinct from zero.
+            # Lightning cannot log None; NaN represents the undefined displacement.
             pl_module.log_dict({
                 f"val/{key}": float("nan") if value is None else value
                 for key, value in self.metrics.summarize().items()
@@ -326,10 +386,12 @@ def main():
         lambda_f=lit_kwargs["lambda_f"],
         beta_l=lit_kwargs["beta_l"],
         beta_f=lit_kwargs["beta_f"],
+        use_weight_mlp=lit_kwargs["use_weight_mlp"],
+        weight_mlp_kwargs=nn_kwargs.get("weight_mlp_kwargs"),
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_weight"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
@@ -389,6 +451,7 @@ def main():
         callbacks=[
             checkpoint_callback, last_checkpoint(checkpoint_dir),
             CSPGenerationMetrics(transform, **sample_kwargs),
+            LossSpikeCheckpoint(),
             SaveTrainingConfig(config, checkpoint_dir),
         ],
     )

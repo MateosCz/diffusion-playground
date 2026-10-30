@@ -1,9 +1,59 @@
 import torch
 from torch import nn
 from torch_geometric.utils import scatter
-
+from typing import Callable
 from src.nn.scoreNNBlock import SinEmbedding, FourierEmbedding
 from torch_geometric.data import Data
+import numpy as np
+
+class Weight_MLP(nn.Module):
+    """CFM log weights from shared Fourier features and an MP output layer."""
+
+    def __init__(self, sin_emb_dim=256, output_dim=1):
+        super().__init__()
+        self.time_emb = MP_Fourier(embedding_dim=sin_emb_dim)
+        self.output_layer = MP_Linear(sin_emb_dim, output_dim)
+
+    def forward(self, s, t):
+        # Each crystal has one scalar time, stored as (B,) or (B, 1).
+        embed_s = self.time_emb(s.reshape(-1))
+        embed_t = self.time_emb(t.reshape(-1))
+        return self.output_layer(mp_sum(embed_s, embed_t))
+
+
+class MP_Linear(nn.Module):
+    """Bias-free linear map with unit-L2 weight rows for magnitude preservation."""
+
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(out_features, in_features))
+
+    def forward(self, x):
+        weight = nn.functional.normalize(self.weight, dim=-1, eps=1e-4)
+        return nn.functional.linear(x, weight)
+
+
+#----------------------------------------------------------------------------
+# Magnitude-preserving Fourier features (Equation 75).
+
+class MP_Fourier(nn.Module):
+    def __init__(self, embedding_dim=256):
+        super().__init__()
+        self.frequencies = nn.Parameter(torch.randn(embedding_dim), requires_grad=False)
+        self.phases      = nn.Parameter(torch.rand(embedding_dim), requires_grad=False)
+
+    def forward(self, a):
+        b = (2 * np.pi) * (a[:, None] * self.frequencies[None, :] + self.phases[None, :])
+        b = torch.cos(b) * np.sqrt(2.)
+        return b
+
+#----------------------------------------------------------------------------
+# Magnitude-preserving sum (Equation 88).
+
+def mp_sum(a, b, t=0.5):
+    return a.lerp(b, t) / np.sqrt((1 - t) ** 2 + t ** 2)
+#----------------------------------------------------------------------------
+
 
 
 class Ambient_CSPLayer(nn.Module):
@@ -49,15 +99,15 @@ class Ambient_CSPLayer(nn.Module):
             edge_graph_index: torch.Tensor,
     ):
 
-        hi, hj = node_features[edge_index[0]], node_features[edge_index[1]]
+        hi, hj = node_features[edge_index[0]], node_features[edge_index[1]] # (E, hidden_dim)
 
-        pos_diff = self.dis_emb(pos_diff)
-        l_edge = lattices[edge_graph_index]
+        pos_diff = self.dis_emb(pos_diff) # (E, num_freqs * f_dim)
+        l_edge = lattices[edge_graph_index] # (E, 6)
 
-        edges_input = torch.cat([hi, hj, l_edge, pos_diff], dim=1)
+        edges_input = torch.cat([hi, hj, l_edge, pos_diff], dim=1) # (E, 2 * hidden_dim + 6 + num_freqs * f_dim)
 
         edge_features = self.edge_mlp(edges_input)
-        return edge_features
+        return edge_features # (E, hidden_dim)
 
     def node_model(
             self,
@@ -118,7 +168,7 @@ class Ambient_CSPNet(nn.Module):
             time_dim: int = 128,
             num_layers: int = 4,
             h_dim: int = 100,
-            # num_freqs: int = 10,
+            # num_freqs: int = 1,
             dis_emb_dim: int = 128,
             ln: bool = True,
             smooth: bool = False,
@@ -127,13 +177,20 @@ class Ambient_CSPNet(nn.Module):
             time_emb: nn.Module = None,
             f_dim: int = 6, # ambient (cosine/sine) pairs for 3D data 3x2
             radii_emb_dim: int = 128,
+            # neighbor_head: bool = False,
+            # composition_context: bool = False,
+            # neighbor_hidden_dim: int = 128,
+            # context_hidden_dim: int = 128,
     ):
         super(Ambient_CSPNet, self).__init__()
         if f_dim < 2 or f_dim % 2:
             raise ValueError("f_dim must contain complete cosine/sine pairs")
+        # if not isinstance(num_freqs, int) or num_freqs < 1:
+        #     raise ValueError("num_freqs must be a positive integer")
 
         self.act_fn = nn.SiLU()
         self.f_dim = f_dim
+        # self.num_freqs = num_freqs
 
         # Embedding layers
         if smooth:
@@ -150,9 +207,8 @@ class Ambient_CSPNet(nn.Module):
 
         self.atom_latent_emb = nn.Linear(hidden_dim + 2 * time_dim + self.radii_emb_dim + 6, hidden_dim)
 
-        # self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
         self.dis_emb_dim = dis_emb_dim
-        # self.dis_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim)
+        # self.pos_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim // 2)
         self.dis_emb = nn.Sequential(
             nn.Linear(f_dim, self.dis_emb_dim),
             nn.SiLU(),
@@ -198,6 +254,27 @@ class Ambient_CSPNet(nn.Module):
         self.pred_h = pred_h
         self.pred_l = pred_l
 
+        # Construct optional modules last so legacy seeded initialization and
+        # checkpoint keys remain unchanged when both additions are disabled.
+        # self.neighbor_head = neighbor_head
+        # self.composition_context = composition_context
+        # if neighbor_head:
+        #     self.neighbor_coeff_mlp = nn.Sequential(
+        #         nn.Linear(hidden_dim * 2 + f_dim + 6, neighbor_hidden_dim),
+        #         nn.SiLU(),
+        #         nn.Linear(neighbor_hidden_dim, f_dim),
+        #     )
+        #     nn.init.zeros_(self.neighbor_coeff_mlp[-1].weight)
+        #     nn.init.zeros_(self.neighbor_coeff_mlp[-1].bias)
+        # if composition_context:
+        #     self.composition_context_mlp = nn.Sequential(
+        #         nn.Linear(hidden_dim + 1, context_hidden_dim),
+        #         nn.SiLU(),
+        #         nn.Linear(context_hidden_dim, hidden_dim),
+        #     )
+        #     nn.init.zeros_(self.composition_context_mlp[-1].weight)
+        #     nn.init.zeros_(self.composition_context_mlp[-1].bias)
+
     def forward(
             self,
             graph: Data,
@@ -221,20 +298,35 @@ class Ambient_CSPNet(nn.Module):
         radii_features = self.radii_emb(radii_squared)
 
         node_features = self.node_embedding(h)
+        # if self.composition_context:
+        #     composition = scatter(
+        #         node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0],
+        #     )
+        #     counts = scatter(
+        #         node_features.new_ones((node_features.shape[0], 1)),
+        #         batch, dim=0, reduce="sum", dim_size=l.shape[0],
+        #     )
+        #     context = self.composition_context_mlp(
+        #         torch.cat([composition, counts.log()], dim=-1),
+        #     )
         node_features = torch.cat([node_features, time_per_atom, radii_features, l[batch]], dim=1) 
         node_features = self.atom_latent_emb(node_features)
+        # if self.composition_context:
+        #     node_features = node_features + context[batch]
 
         # Relative dot/cross products are invariant under periodic translations.
-        # Smooth normalization also keeps the time JVP finite at zero states.
         normalized = pairs / (radii_squared + 1e-8).sqrt().unsqueeze(-1) 
         source, target = normalized[edge_index[0]], normalized[edge_index[1]] # (E,3,2) R^2xR^2xR^2, each dim in R^2, total 3 dims
         dot = (source * target).sum(-1) # (E,3) 3 dims dot product
         cross = source[..., 0] * target[..., 1] - source[..., 1] * target[..., 0] # (E,3) cross product
         pos_diff = torch.stack([dot, cross], dim=-1).flatten(start_dim=1) # (E,3,2) rotate invariant dot/cross representation
+
+        # pos_diff_features = self.pos_emb(torch.atan2(cross, dot)) # (E, num_freqs * f_dim) f_dim is ambient features dim (3*2=6)
         edge_graph_index = batch[edge_index[0]]
 
         for layer in self.layers:
             node_features = layer.forward(
+                # pos_diff=pos_diff_features,
                 pos_diff=pos_diff,
                 node_features=node_features,
                 l=l,
@@ -250,10 +342,29 @@ class Ambient_CSPNet(nn.Module):
         coefficients = self.out_f(node_features).reshape_as(pairs)
         perpendicular_pairs = torch.stack([-pairs[..., 1], pairs[..., 0]], dim=-1) # counterclockwise rotate vectors by 90 degrees, so it is the orthogonal vector
         residual = coefficients[..., :1] * pairs + coefficients[..., 1:] * perpendicular_pairs # first term is radial component, second term is tangential component
+        # if self.neighbor_head:
+        #     # Neighbor pairs provide an equivariant direction even when a
+        #     # source pair is zero. Self edges do not count as neighbors.
+        #     nonself = edge_index[0] != edge_index[1]
+        #     source_index, target_index = edge_index[:, nonself]
+        #     edge_coefficients = self.neighbor_coeff_mlp(torch.cat([
+        #         node_features[source_index], node_features[target_index],
+        #         pos_diff[nonself], l[edge_graph_index[nonself]],
+        #     ], dim=-1)).reshape(-1, self.f_dim // 2, 2)
+        #     neighbor_residual = (
+        #         edge_coefficients[..., :1] * pairs[target_index]
+        #         + edge_coefficients[..., 1:] * perpendicular_pairs[target_index]
+        #     )
+        #     residual = residual + scatter(
+        #         neighbor_residual, source_index, dim=0, reduce="mean",
+        #         dim_size=pairs.shape[0],
+        #     )
         out = {"f": pos + residual.flatten(start_dim=1)}
 
         if self.pred_l:
             graph_features = scatter(node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0])
+            # if self.composition_context:
+            #     graph_features = graph_features + context
             out_l = self.out_l(graph_features)
             out_l = out_l.view(-1, 6)
             out["l"] = out_l + l
