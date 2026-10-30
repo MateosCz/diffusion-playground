@@ -77,7 +77,7 @@ nn_kwargs = {
     "num_layers": 6,
     # "num_layers": 4,
     "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
-    "num_freqs": 128,
+    # "num_freqs": 128,
     "dis_emb_dim": 128,
     "ln": True,
     "smooth": False,    # embed discrete atom types via nn.Embedding
@@ -85,21 +85,21 @@ nn_kwargs = {
     "pred_l": True,
     "f_dim": 2 * dim,
     "radii_emb_dim": 128,
-    "neighbor_head": True,
-    "neighbor_hidden_dim": 128,
+    # "neighbor_head": True,
+    # "neighbor_hidden_dim": 128,
     "weight_mlp_kwargs": {
         "sin_emb_dim": 256,
     },
-    "composition_context": True,
-    "context_hidden_dim": 128,
+    # "composition_context": True,
+    # "context_hidden_dim": 128,
 }
 
 lit_kwargs = {
     "use_weight_mlp": False,
     "lambda_l": 0.05,
     "lambda_f": 1.0,
-    "beta_l": 0.25,
-    "beta_f": 0.25,
+    "beta_l": 0.1,
+    "beta_f": 0.05,
 
 }
 

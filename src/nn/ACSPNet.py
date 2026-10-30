@@ -168,7 +168,7 @@ class Ambient_CSPNet(nn.Module):
             time_dim: int = 128,
             num_layers: int = 4,
             h_dim: int = 100,
-            num_freqs: int = 1,
+            # num_freqs: int = 1,
             dis_emb_dim: int = 128,
             ln: bool = True,
             smooth: bool = False,
@@ -177,20 +177,20 @@ class Ambient_CSPNet(nn.Module):
             time_emb: nn.Module = None,
             f_dim: int = 6, # ambient (cosine/sine) pairs for 3D data 3x2
             radii_emb_dim: int = 128,
-            neighbor_head: bool = False,
-            composition_context: bool = False,
-            neighbor_hidden_dim: int = 128,
-            context_hidden_dim: int = 128,
+            # neighbor_head: bool = False,
+            # composition_context: bool = False,
+            # neighbor_hidden_dim: int = 128,
+            # context_hidden_dim: int = 128,
     ):
         super(Ambient_CSPNet, self).__init__()
         if f_dim < 2 or f_dim % 2:
             raise ValueError("f_dim must contain complete cosine/sine pairs")
-        if not isinstance(num_freqs, int) or num_freqs < 1:
-            raise ValueError("num_freqs must be a positive integer")
+        # if not isinstance(num_freqs, int) or num_freqs < 1:
+        #     raise ValueError("num_freqs must be a positive integer")
 
         self.act_fn = nn.SiLU()
         self.f_dim = f_dim
-        self.num_freqs = num_freqs
+        # self.num_freqs = num_freqs
 
         # Embedding layers
         if smooth:
@@ -208,9 +208,9 @@ class Ambient_CSPNet(nn.Module):
         self.atom_latent_emb = nn.Linear(hidden_dim + 2 * time_dim + self.radii_emb_dim + 6, hidden_dim)
 
         self.dis_emb_dim = dis_emb_dim
-        self.pos_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim // 2)
+        # self.pos_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim // 2)
         self.dis_emb = nn.Sequential(
-            nn.Linear(f_dim * num_freqs, self.dis_emb_dim),
+            nn.Linear(f_dim, self.dis_emb_dim),
             nn.SiLU(),
         )
 
@@ -256,24 +256,24 @@ class Ambient_CSPNet(nn.Module):
 
         # Construct optional modules last so legacy seeded initialization and
         # checkpoint keys remain unchanged when both additions are disabled.
-        self.neighbor_head = neighbor_head
-        self.composition_context = composition_context
-        if neighbor_head:
-            self.neighbor_coeff_mlp = nn.Sequential(
-                nn.Linear(hidden_dim * 2 + f_dim + 6, neighbor_hidden_dim),
-                nn.SiLU(),
-                nn.Linear(neighbor_hidden_dim, f_dim),
-            )
-            nn.init.zeros_(self.neighbor_coeff_mlp[-1].weight)
-            nn.init.zeros_(self.neighbor_coeff_mlp[-1].bias)
-        if composition_context:
-            self.composition_context_mlp = nn.Sequential(
-                nn.Linear(hidden_dim + 1, context_hidden_dim),
-                nn.SiLU(),
-                nn.Linear(context_hidden_dim, hidden_dim),
-            )
-            nn.init.zeros_(self.composition_context_mlp[-1].weight)
-            nn.init.zeros_(self.composition_context_mlp[-1].bias)
+        # self.neighbor_head = neighbor_head
+        # self.composition_context = composition_context
+        # if neighbor_head:
+        #     self.neighbor_coeff_mlp = nn.Sequential(
+        #         nn.Linear(hidden_dim * 2 + f_dim + 6, neighbor_hidden_dim),
+        #         nn.SiLU(),
+        #         nn.Linear(neighbor_hidden_dim, f_dim),
+        #     )
+        #     nn.init.zeros_(self.neighbor_coeff_mlp[-1].weight)
+        #     nn.init.zeros_(self.neighbor_coeff_mlp[-1].bias)
+        # if composition_context:
+        #     self.composition_context_mlp = nn.Sequential(
+        #         nn.Linear(hidden_dim + 1, context_hidden_dim),
+        #         nn.SiLU(),
+        #         nn.Linear(context_hidden_dim, hidden_dim),
+        #     )
+        #     nn.init.zeros_(self.composition_context_mlp[-1].weight)
+        #     nn.init.zeros_(self.composition_context_mlp[-1].bias)
 
     def forward(
             self,
@@ -298,21 +298,21 @@ class Ambient_CSPNet(nn.Module):
         radii_features = self.radii_emb(radii_squared)
 
         node_features = self.node_embedding(h)
-        if self.composition_context:
-            composition = scatter(
-                node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0],
-            )
-            counts = scatter(
-                node_features.new_ones((node_features.shape[0], 1)),
-                batch, dim=0, reduce="sum", dim_size=l.shape[0],
-            )
-            context = self.composition_context_mlp(
-                torch.cat([composition, counts.log()], dim=-1),
-            )
+        # if self.composition_context:
+        #     composition = scatter(
+        #         node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0],
+        #     )
+        #     counts = scatter(
+        #         node_features.new_ones((node_features.shape[0], 1)),
+        #         batch, dim=0, reduce="sum", dim_size=l.shape[0],
+        #     )
+        #     context = self.composition_context_mlp(
+        #         torch.cat([composition, counts.log()], dim=-1),
+        #     )
         node_features = torch.cat([node_features, time_per_atom, radii_features, l[batch]], dim=1) 
         node_features = self.atom_latent_emb(node_features)
-        if self.composition_context:
-            node_features = node_features + context[batch]
+        # if self.composition_context:
+        #     node_features = node_features + context[batch]
 
         # Relative dot/cross products are invariant under periodic translations.
         normalized = pairs / (radii_squared + 1e-8).sqrt().unsqueeze(-1) 
@@ -321,12 +321,13 @@ class Ambient_CSPNet(nn.Module):
         cross = source[..., 0] * target[..., 1] - source[..., 1] * target[..., 0] # (E,3) cross product
         pos_diff = torch.stack([dot, cross], dim=-1).flatten(start_dim=1) # (E,3,2) rotate invariant dot/cross representation
 
-        pos_diff_features = self.pos_emb(torch.atan2(cross, dot)) # (E, num_freqs * f_dim) f_dim is ambient features dim (3*2=6)
+        # pos_diff_features = self.pos_emb(torch.atan2(cross, dot)) # (E, num_freqs * f_dim) f_dim is ambient features dim (3*2=6)
         edge_graph_index = batch[edge_index[0]]
 
         for layer in self.layers:
             node_features = layer.forward(
-                pos_diff=pos_diff_features,
+                # pos_diff=pos_diff_features,
+                pos_diff=pos_diff,
                 node_features=node_features,
                 l=l,
                 edge_index=edge_index,
@@ -341,29 +342,29 @@ class Ambient_CSPNet(nn.Module):
         coefficients = self.out_f(node_features).reshape_as(pairs)
         perpendicular_pairs = torch.stack([-pairs[..., 1], pairs[..., 0]], dim=-1) # counterclockwise rotate vectors by 90 degrees, so it is the orthogonal vector
         residual = coefficients[..., :1] * pairs + coefficients[..., 1:] * perpendicular_pairs # first term is radial component, second term is tangential component
-        if self.neighbor_head:
-            # Neighbor pairs provide an equivariant direction even when a
-            # source pair is zero. Self edges do not count as neighbors.
-            nonself = edge_index[0] != edge_index[1]
-            source_index, target_index = edge_index[:, nonself]
-            edge_coefficients = self.neighbor_coeff_mlp(torch.cat([
-                node_features[source_index], node_features[target_index],
-                pos_diff[nonself], l[edge_graph_index[nonself]],
-            ], dim=-1)).reshape(-1, self.f_dim // 2, 2)
-            neighbor_residual = (
-                edge_coefficients[..., :1] * pairs[target_index]
-                + edge_coefficients[..., 1:] * perpendicular_pairs[target_index]
-            )
-            residual = residual + scatter(
-                neighbor_residual, source_index, dim=0, reduce="mean",
-                dim_size=pairs.shape[0],
-            )
+        # if self.neighbor_head:
+        #     # Neighbor pairs provide an equivariant direction even when a
+        #     # source pair is zero. Self edges do not count as neighbors.
+        #     nonself = edge_index[0] != edge_index[1]
+        #     source_index, target_index = edge_index[:, nonself]
+        #     edge_coefficients = self.neighbor_coeff_mlp(torch.cat([
+        #         node_features[source_index], node_features[target_index],
+        #         pos_diff[nonself], l[edge_graph_index[nonself]],
+        #     ], dim=-1)).reshape(-1, self.f_dim // 2, 2)
+        #     neighbor_residual = (
+        #         edge_coefficients[..., :1] * pairs[target_index]
+        #         + edge_coefficients[..., 1:] * perpendicular_pairs[target_index]
+        #     )
+        #     residual = residual + scatter(
+        #         neighbor_residual, source_index, dim=0, reduce="mean",
+        #         dim_size=pairs.shape[0],
+        #     )
         out = {"f": pos + residual.flatten(start_dim=1)}
 
         if self.pred_l:
             graph_features = scatter(node_features, batch, dim=0, reduce="mean", dim_size=l.shape[0])
-            if self.composition_context:
-                graph_features = graph_features + context
+            # if self.composition_context:
+            #     graph_features = graph_features + context
             out_l = self.out_l(graph_features)
             out_l = out_l.view(-1, 6)
             out["l"] = out_l + l
