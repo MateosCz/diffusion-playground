@@ -9,3 +9,5 @@ data/*/*.pt
 /src/SDECourse_exercises/
 /reports
 .DS_Store
+*.out
+*.err

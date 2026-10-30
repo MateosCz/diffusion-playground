@@ -37,7 +37,7 @@ import numpy as np
 total_time = 1.0
 dim = 3
 n_epoch = 3000
-lr = 1e-3
+lr = 5e-4
 batch_size = 64
 num_workers = 1
 eta = 0.75
@@ -86,10 +86,10 @@ nn_kwargs = {
 }
 
 lit_kwargs = {
-    "lambda_l": 1.0,
-    "lambda_f": 1.5,
-    "beta_l": 3.0,
-    "beta_f": 3.0,
+    "lambda_l": 0.05,
+    "lambda_f": 1.0,
+    "beta_l": 0.1,
+    "beta_f": 0.05,
 
 }
 
@@ -329,7 +329,7 @@ def main():
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_eta_{eta}_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_beta_l_{lit_kwargs['beta_l']}_beta_f_{lit_kwargs['beta_f']}_zeroinitNN"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
