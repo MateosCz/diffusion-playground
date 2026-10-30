@@ -206,7 +206,7 @@ class CSPGenerationMetrics(L.Callback):
             PyGData_to_Structure(graph, *self.transforms)
             for graph in batch.to_data_list()
         ]
-        generated = pl_module.sample(batch, n_steps=self.n_steps)
+        generated = pl_module.sample(batch, n_steps=self.n_steps, pc=False)
         # Decode R^6 ambient pairs directly to fractional coordinates in [0, 1).
         fractional = pl_module.rg_vfm.to_intrinsic(generated.x)
         structures = kldm_output_to_structures_batch(
