@@ -8,7 +8,7 @@ from torch_geometric.data import Batch
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import torch.nn as nn
 
-from src.nn.ACSPNet import Weight_MLP
+from src.nn.ACSPNet import Weight_MLP, Weight_MLP_SiLU
 
 
 class LitCSPFlowMap(L.LightningModule):
@@ -21,6 +21,7 @@ class LitCSPFlowMap(L.LightningModule):
         ema_start: int = 100,
         weight_mlp_kwargs: dict | None = None,
         use_weight_mlp: bool = True,
+        non_linear_weight_mlp: bool = False,
     ):
         super().__init__()
         if not 0 < eta <= 1:
@@ -48,9 +49,14 @@ class LitCSPFlowMap(L.LightningModule):
         nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.pi.out_l.bias)
         if self.use_weight_mlp:
-            self.weight_mlp = Weight_MLP(
-                output_dim=2, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
-            )
+            if self.non_linear_weight_mlp:
+                self.weight_mlp_f = Weight_MLP_SiLU(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
+            else:
+                self.weight_mlp_l = Weight_MLP(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
         else:
             self.weight_mlp = None
 
@@ -80,15 +86,29 @@ class LitCSPFlowMap(L.LightningModule):
         """Return the coordinate and lattice endpoints under keys f/l."""
         return self.pi(graph, s, t)
 
+    # def weighted_loss(self, losses, s, t):
+    #     """Flow Maps log weights, one column each for coordinates and lattice."""
+    #     if not self.use_weight_mlp:
+    #         return {key: losses[key].mean() for key in ("f", "l")}
+    #     weight = self.weight_mlp(s, t)
+    #     return {
+    #         key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
+    #         for i, key in enumerate(("f", "l"))
+    #     }
     def weighted_loss(self, losses, s, t):
         """Flow Maps log weights, one column each for coordinates and lattice."""
         if not self.use_weight_mlp:
             return {key: losses[key].mean() for key in ("f", "l")}
-        weight = self.weight_mlp(s, t)
-        return {
-            key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
-            for i, key in enumerate(("f", "l"))
-        }
+        weight_f = self.weight_mlp_f(s, t)
+        weight_l = self.weight_mlp_l(s, t)
+        weighted_loss = {}
+        for i, key in enumerate(("f", "l")):
+            if key == "f":
+                weight = weight_f
+            else:
+                weight = weight_l
+            weighted_loss[key] = (torch.exp(-weight) * losses[key] + weight).mean()
+        return weighted_loss
 
     def sample_training_pair(self, graph1, graph0=None, *, t=None):
         """Return (t, graph_t, target_graph), with times of shape (B, 1)."""

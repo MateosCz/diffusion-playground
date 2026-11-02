@@ -46,7 +46,7 @@ eta = 0.75
 evaluate_batch_size = 64
 val_portion = 0.2
 generation_eval_every_n_epochs = 10
-continue_ckpt = None  # Set to a checkpoint path to resume training; None starts a new run.
+continue_ckpt = "checkpoints/20261030_162630_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_weight/last.ckpt"  # Set to a checkpoint path to resume training; None starts a new run.
 
 data_folder = "data/mp-20"
 dataset_name = "mp-20"
