@@ -46,8 +46,8 @@ eta = 0.75
 evaluate_batch_size = 64
 val_portion = 0.2
 generation_eval_every_n_epochs = 10
-continue_ckpt = "checkpoints/20261030_162630_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_weight/last.ckpt"  # Set to a checkpoint path to resume training; None starts a new run.
-
+# continue_ckpt = "checkpoints/20261030_162630_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_weight/last.ckpt"  # Set to a checkpoint path to resume training; None starts a new run.
+continue_ckpt = None
 data_folder = "data/mp-20"
 dataset_name = "mp-20"
 
@@ -98,10 +98,11 @@ nn_kwargs = {
 
 lit_kwargs = {
     "use_weight_mlp": True,
-    "lambda_l": 0.05,
+    "lambda_l": 0.005,
     "lambda_f": 1.0,
     "beta_l": 0.1,
     "beta_f": 0.05,
+    "non_linear_weight_mlp": True,
 
 }
 
@@ -387,11 +388,12 @@ def main():
         beta_l=lit_kwargs["beta_l"],
         beta_f=lit_kwargs["beta_f"],
         use_weight_mlp=lit_kwargs["use_weight_mlp"],
+        non_linear_weight_mlp=lit_kwargs["non_linear_weight_mlp"],
         weight_mlp_kwargs=nn_kwargs.get("weight_mlp_kwargs"),
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_weight"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_non_linear_weight_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",

@@ -48,17 +48,25 @@ class LitCSPFlowMap(L.LightningModule):
 
         nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.pi.out_l.bias)
+        self.non_linear_weight_mlp = non_linear_weight_mlp
         if self.use_weight_mlp:
             if self.non_linear_weight_mlp:
                 self.weight_mlp_f = Weight_MLP_SiLU(
                     output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
                 )
+                self.weight_mlp_l = Weight_MLP_SiLU(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
             else:
+                self.weight_mlp_f = Weight_MLP(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
                 self.weight_mlp_l = Weight_MLP(
                     output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
                 )
         else:
-            self.weight_mlp = None
+            self.weight_mlp_f = None
+            self.weight_mlp_l = None
 
         self.warmup_steps = warmup_steps
         if with_ema:
@@ -79,7 +87,7 @@ class LitCSPFlowMap(L.LightningModule):
         if not self.use_weight_mlp:
             state_dict = checkpoint["state_dict"]
             for key in list(state_dict):
-                if key.startswith("weight_mlp."):
+                if key.startswith("weight_mlp_f.") or key.startswith("weight_mlp_l."):
                     del state_dict[key]
 
     def forward(self, graph, s, t):
@@ -99,8 +107,8 @@ class LitCSPFlowMap(L.LightningModule):
         """Flow Maps log weights, one column each for coordinates and lattice."""
         if not self.use_weight_mlp:
             return {key: losses[key].mean() for key in ("f", "l")}
-        weight_f = self.weight_mlp_f(s, t)
-        weight_l = self.weight_mlp_l(s, t)
+        weight_f = self.weight_mlp_f(s, t).squeeze(-1)
+        weight_l = self.weight_mlp_l(s, t).squeeze(-1)
         weighted_loss = {}
         for i, key in enumerate(("f", "l")):
             if key == "f":
@@ -212,7 +220,7 @@ class LitCSPFlowMap(L.LightningModule):
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(
-            [*self.pi.parameters(), *(self.weight_mlp.parameters() if self.use_weight_mlp else [])], # weight_mlp parameters are only used if use_weight_mlp is True
+            [*self.pi.parameters(), *(self.weight_mlp_f.parameters() if self.use_weight_mlp else []), *(self.weight_mlp_l.parameters() if self.use_weight_mlp else [])], # weight_mlp parameters are only used if use_weight_mlp is True
             lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-2,
         )
 
