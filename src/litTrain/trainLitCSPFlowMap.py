@@ -39,8 +39,8 @@ import numpy as np
 total_time = 1.0
 dim = 3
 n_epoch = 3000
-lr = 5e-4
-batch_size = 64
+lr = 5e-3
+batch_size = 128 * 4
 num_workers = 1
 eta = 0.75
 evaluate_batch_size = 64
@@ -102,7 +102,7 @@ lit_kwargs = {
     "lambda_f": 1.0,
     "beta_l": 0.1,
     "beta_f": 0.05,
-    "non_linear_weight_mlp": True,
+    "non_linear_weight_mlp": False,
 
 }
 
@@ -393,7 +393,9 @@ def main():
         **train_kwargs,
     )
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_non_linear_weight_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_linear_weight_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_lr_{lr}_batch_size_{batch_size}"
+    if lit_kwargs["non_linear_weight_mlp"]:
+        experiment_name += "_non_linear_weight_mlp"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
