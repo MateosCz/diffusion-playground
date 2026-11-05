@@ -83,12 +83,55 @@ class LitCSPFlowMap(L.LightningModule):
         self.save_hyperparameters(ignore=["pi", "flow_map", "rg_vfm", "l_vfm"])
 
     def on_load_checkpoint(self, checkpoint):
-        """Ignore optional loss-weight parameters when their network is disabled."""
+        """Migrate a shared two-output loss-weight network to independent f/l nets."""
+        state_dict = checkpoint["state_dict"]
+        prefixes = ("weight_mlp.", "weight_mlp_f.", "weight_mlp_l.")
         if not self.use_weight_mlp:
-            state_dict = checkpoint["state_dict"]
             for key in list(state_dict):
-                if key.startswith("weight_mlp_f.") or key.startswith("weight_mlp_l."):
+                if key.startswith(prefixes):
                     del state_dict[key]
+            return
+
+        legacy_prefix = "weight_mlp."
+        legacy_keys = [key for key in state_dict if key.startswith(legacy_prefix)]
+        if not legacy_keys:
+            return  # Current two-network checkpoints already have the right keys.
+        if any(key.startswith(prefixes[1:]) for key in state_dict):
+            raise RuntimeError("Checkpoint mixes shared and separate WeightMLP keys.")
+
+        legacy = {key[len(legacy_prefix):]: state_dict[key] for key in legacy_keys}
+        converted = {}
+        for index, branch in enumerate(("weight_mlp_f", "weight_mlp_l")):
+            expected = getattr(self, branch).state_dict()
+            if set(legacy) != set(expected):
+                raise RuntimeError(
+                    "Cannot migrate WeightMLP: source and target architectures differ. "
+                    "For the old linear checkpoint, set non_linear_weight_mlp=False. "
+                    f"Missing keys: {sorted(set(expected) - set(legacy))}; "
+                    f"unexpected keys: {sorted(set(legacy) - set(expected))}."
+                )
+            for suffix, target in expected.items():
+                value = legacy[suffix]
+                if suffix in ("output_layer.weight", "output_layer.bias"):
+                    if value.ndim == 0 or value.shape[0] != 2:
+                        raise RuntimeError(
+                            f"Expected two output rows in weight_mlp.{suffix}, "
+                            f"got {tuple(value.shape)}."
+                        )
+                    value = value[index:index + 1]
+                if value.shape != target.shape:
+                    raise RuntimeError(
+                        f"Cannot migrate weight_mlp.{suffix} to {branch}.{suffix}: "
+                        f"shape {tuple(value.shape)} != {tuple(target.shape)}. "
+                        "Check weight_mlp_kwargs, including sin_emb_dim."
+                    )
+                # Copy Fourier features too, and give the two branches independent storage.
+                converted[f"{branch}.{suffix}"] = value.clone()
+
+        # Change the checkpoint only after both branches have passed validation.
+        for key in legacy_keys:
+            del state_dict[key]
+        state_dict.update(converted)
 
     def forward(self, graph, s, t):
         """Return the coordinate and lattice endpoints under keys f/l."""
@@ -216,13 +259,27 @@ class LitCSPFlowMap(L.LightningModule):
         else:
             pi = self.pi
         # return self.flow_map.sample_euler(graph0, pi, n_steps=n_steps, t_max_clip=0.99, pc=True, pc_steps=2)
+        pc = False
         return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=pc, pc_steps=3)
 
     def configure_optimizers(self):
+        # parameters = [parameter for parameter in self.parameters() if parameter.requires_grad]
+        # opt = torch.optim.AdamW(
+        #     parameters,
+        #     lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-2,
+        # )
+        parameters = [
+            *self.pi.parameters(),
+            *(self.weight_mlp_f.parameters() if self.use_weight_mlp else []),
+            *(self.weight_mlp_l.parameters() if self.use_weight_mlp else []),
+                ]
         opt = torch.optim.AdamW(
-            [*self.pi.parameters(), *(self.weight_mlp_f.parameters() if self.use_weight_mlp else []), *(self.weight_mlp_l.parameters() if self.use_weight_mlp else [])], # weight_mlp parameters are only used if use_weight_mlp is True
-            lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-2,
-        )
+                parameters,
+                lr=self.lr,
+                amsgrad=True,
+                foreach=True,
+                weight_decay=1e-12,
+            )
 
         min_lr_ratio = 0.01
         total_steps = int(self.trainer.estimated_stepping_batches)
@@ -242,4 +299,3 @@ class LitCSPFlowMap(L.LightningModule):
                 "frequency": 1,
             }
         }
-
