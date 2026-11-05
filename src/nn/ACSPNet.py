@@ -6,7 +6,7 @@ from src.nn.scoreNNBlock import SinEmbedding, FourierEmbedding
 from torch_geometric.data import Data
 import numpy as np
 
-class Weight_MLP(nn.Module):
+class Weight_MLP_Linear(nn.Module):
     """CFM log weights from shared Fourier features and an MP output layer."""
 
     def __init__(self, sin_emb_dim=256, output_dim=1):
@@ -21,6 +21,29 @@ class Weight_MLP(nn.Module):
         return self.output_layer(mp_sum(embed_s, embed_t))
 
 
+# Preserve imports used by existing training modules and checkpoints.
+Weight_MLP = Weight_MLP_Linear
+
+
+class Weight_MLP_SiLU(nn.Module):
+    """CFM log weights from shared Fourier features and an MP output layer."""
+
+    def __init__(self, sin_emb_dim=256, output_dim=1):
+        super().__init__()
+        self.time_emb = MP_Fourier(embedding_dim=sin_emb_dim)
+        self.hidden_layer = MP_Linear(sin_emb_dim, sin_emb_dim)
+        self.act = MP_SiLU()
+        self.output_layer = MP_Linear(sin_emb_dim, output_dim)
+
+    def forward(self, s, t):
+        # Each crystal has one scalar time, stored as (B,) or (B, 1).
+        embed_s = self.time_emb(s.reshape(-1))
+        embed_t = self.time_emb(t.reshape(-1))
+        hidden = self.hidden_layer(mp_sum(embed_s, embed_t))
+        hidden = self.act(hidden)
+        return self.output_layer(hidden)
+
+
 class MP_Linear(nn.Module):
     """Bias-free linear map with unit-L2 weight rows for magnitude preservation."""
 
@@ -31,6 +54,14 @@ class MP_Linear(nn.Module):
     def forward(self, x):
         weight = nn.functional.normalize(self.weight, dim=-1, eps=1e-4)
         return nn.functional.linear(x, weight)
+
+class MP_SiLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        return self.act(x) / 0.596
 
 
 #----------------------------------------------------------------------------
