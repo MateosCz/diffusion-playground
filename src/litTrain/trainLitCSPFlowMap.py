@@ -38,16 +38,19 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 total_time = 1.0
 dim = 3
-n_epoch = 3000
-lr = 1e-3
-batch_size = 64
+n_epoch = 3000 + 1 + 2929
+lr = 5e-5
+batch_size = 128 * 4
 num_workers = 1
 eta = 0.75
 evaluate_batch_size = 64
-val_portion = 0.2
+val_portion = 0.2 
 generation_eval_every_n_epochs = 10
-continue_ckpt = None  # Set to a checkpoint path to resume training; None starts a new run.
-
+# Load model/EMA/WeightMLP weights into a fresh training run.
+init_ckpt = None
+# Use only for a full resume from a compatible new-format training checkpoint.
+# continue_ckpt = "checkpoints/20261102_172152_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.05_lambda_f_1.0_lr_0.001_batch_size_512/flowmap_csp_2879-0.126604.ckpt"
+continue_ckpt = "checkpoints/20261102_181931_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.005_lambda_f_1.0_lr_0.005_batch_size_512/flowmap_csp_2929-0.126363.ckpt"
 data_folder = "data/mp-20"
 dataset_name = "mp-20"
 
@@ -97,18 +100,19 @@ nn_kwargs = {
 }
 
 lit_kwargs = {
-    "use_weight_mlp": False,
-    "lambda_l": 0.05,
+    "use_weight_mlp": True,
+    "lambda_l": 0.005,
     "lambda_f": 1.0,
     "beta_l": 0.1,
     "beta_f": 0.05,
+    "non_linear_weight_mlp": False,
 
 }
 
 train_kwargs = {
     "with_ema": True,
     "ema_decay": 0.999,
-    "ema_start": 500,
+    "ema_start": 500 if continue_ckpt is None else -1,
     "warmup_steps": 1000,
 
 }
@@ -141,6 +145,19 @@ def build_flowmap() -> JointFlowMapCSP:
         l_flowmap=VFMFlowMap(VFM(dim=6, **l_vfm_kwargs)),
         # # Self-distillation treats the diagonal endpoint prediction as a teacher.
         # stop_gradient_f=True,
+    )
+
+
+def load_initial_weights(lit_model, checkpoint_path):
+    """Load and migrate weights without restoring optimizer, scheduler, or loops."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    lit_model.on_load_checkpoint(checkpoint)
+    lit_model.load_state_dict(checkpoint["state_dict"], strict=True)
+    print(
+        f"Initialized weights from {checkpoint_path} "
+        f"(source epoch={checkpoint.get('epoch')}, "
+        f"global_step={checkpoint.get('global_step')}); "
+        "optimizer, scheduler, and training epoch start fresh."
     )
 
 class FractionalPositions:
@@ -350,6 +367,13 @@ class SaveTrainingConfig(L.Callback):
 
 
 def main():
+    if init_ckpt is not None and continue_ckpt is not None:
+        raise ValueError("Set only one of init_ckpt and continue_ckpt.")
+    effective_train_kwargs = dict(train_kwargs)
+    if init_ckpt is not None:
+        # Retained EMA must track the model immediately when the epoch restarts at 0.
+        effective_train_kwargs["ema_start"] = -1
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     device = get_default_device()
     accelerator = get_lightning_accelerator(device)
@@ -387,11 +411,16 @@ def main():
         beta_l=lit_kwargs["beta_l"],
         beta_f=lit_kwargs["beta_f"],
         use_weight_mlp=lit_kwargs["use_weight_mlp"],
+        non_linear_weight_mlp=lit_kwargs["non_linear_weight_mlp"],
         weight_mlp_kwargs=nn_kwargs.get("weight_mlp_kwargs"),
-        **train_kwargs,
+        **effective_train_kwargs,
     )
+    if init_ckpt is not None:
+        load_initial_weights(lit_model, init_ckpt)
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_weight"
+    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_linear_weight_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_lr_{lr}_batch_size_{batch_size}_continue_thirdbest_seperateWeightMlp"
+    if lit_kwargs["non_linear_weight_mlp"]:
+        experiment_name += "_non_linear_weight_mlp"
     wandb_logger = WandbLogger(
         name=experiment_name,
         save_dir="wandb_logs",
@@ -423,11 +452,12 @@ def main():
         "val_portion": val_portion,
         "num_workers": num_workers,
         "generation_eval_every_n_epochs": generation_eval_every_n_epochs,
+        "init_ckpt": init_ckpt,
         "continue_ckpt": continue_ckpt,
         "accelerator": accelerator,
         "nn_kwargs": nn_kwargs,
         "lit_kwargs": lit_kwargs,
-        "train_kwargs": train_kwargs,
+        "train_kwargs": effective_train_kwargs,
         "sample_kwargs": sample_kwargs,
         "l_vfm_kwargs": l_vfm_kwargs,
         "f_vfm_kwargs": f_vfm_kwargs,

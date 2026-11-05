@@ -21,10 +21,6 @@ class Weight_MLP_Linear(nn.Module):
         return self.output_layer(mp_sum(embed_s, embed_t))
 
 
-# Preserve imports used by existing training modules and checkpoints.
-Weight_MLP = Weight_MLP_Linear
-
-
 class Weight_MLP_SiLU(nn.Module):
     """CFM log weights from shared Fourier features and an MP output layer."""
 
@@ -42,6 +38,17 @@ class Weight_MLP_SiLU(nn.Module):
         hidden = self.hidden_layer(mp_sum(embed_s, embed_t))
         hidden = self.act(hidden)
         return self.output_layer(hidden)
+
+
+class MP_SiLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        return self.act(x) / 0.596
+
+
 
 
 class MP_Linear(nn.Module):

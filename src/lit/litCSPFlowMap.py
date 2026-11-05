@@ -8,7 +8,7 @@ from torch_geometric.data import Batch
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import torch.nn as nn
 
-from src.nn.ACSPNet import Weight_MLP
+from src.nn.ACSPNet import Weight_MLP, Weight_MLP_SiLU
 
 
 class LitCSPFlowMap(L.LightningModule):
@@ -21,6 +21,7 @@ class LitCSPFlowMap(L.LightningModule):
         ema_start: int = 100,
         weight_mlp_kwargs: dict | None = None,
         use_weight_mlp: bool = True,
+        non_linear_weight_mlp: bool = False,
     ):
         super().__init__()
         if not 0 < eta <= 1:
@@ -47,12 +48,25 @@ class LitCSPFlowMap(L.LightningModule):
 
         nn.init.normal_(self.pi.out_l.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.pi.out_l.bias)
+        self.non_linear_weight_mlp = non_linear_weight_mlp
         if self.use_weight_mlp:
-            self.weight_mlp = Weight_MLP(
-                output_dim=2, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
-            )
+            if self.non_linear_weight_mlp:
+                self.weight_mlp_f = Weight_MLP_SiLU(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
+                self.weight_mlp_l = Weight_MLP_SiLU(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
+            else:
+                self.weight_mlp_f = Weight_MLP(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
+                self.weight_mlp_l = Weight_MLP(
+                    output_dim=1, **(weight_mlp_kwargs or {}), # 2 for coordinate and lattice
+                )
         else:
-            self.weight_mlp = None
+            self.weight_mlp_f = None
+            self.weight_mlp_l = None
 
         self.warmup_steps = warmup_steps
         if with_ema:
@@ -69,26 +83,83 @@ class LitCSPFlowMap(L.LightningModule):
         self.save_hyperparameters(ignore=["pi", "flow_map", "rg_vfm", "l_vfm"])
 
     def on_load_checkpoint(self, checkpoint):
-        """Ignore optional loss-weight parameters when their network is disabled."""
+        """Migrate a shared two-output loss-weight network to independent f/l nets."""
+        state_dict = checkpoint["state_dict"]
+        prefixes = ("weight_mlp.", "weight_mlp_f.", "weight_mlp_l.")
         if not self.use_weight_mlp:
-            state_dict = checkpoint["state_dict"]
             for key in list(state_dict):
-                if key.startswith("weight_mlp."):
+                if key.startswith(prefixes):
                     del state_dict[key]
+            return
+
+        legacy_prefix = "weight_mlp."
+        legacy_keys = [key for key in state_dict if key.startswith(legacy_prefix)]
+        if not legacy_keys:
+            return  # Current two-network checkpoints already have the right keys.
+        if any(key.startswith(prefixes[1:]) for key in state_dict):
+            raise RuntimeError("Checkpoint mixes shared and separate WeightMLP keys.")
+
+        legacy = {key[len(legacy_prefix):]: state_dict[key] for key in legacy_keys}
+        converted = {}
+        for index, branch in enumerate(("weight_mlp_f", "weight_mlp_l")):
+            expected = getattr(self, branch).state_dict()
+            if set(legacy) != set(expected):
+                raise RuntimeError(
+                    "Cannot migrate WeightMLP: source and target architectures differ. "
+                    "For the old linear checkpoint, set non_linear_weight_mlp=False. "
+                    f"Missing keys: {sorted(set(expected) - set(legacy))}; "
+                    f"unexpected keys: {sorted(set(legacy) - set(expected))}."
+                )
+            for suffix, target in expected.items():
+                value = legacy[suffix]
+                if suffix in ("output_layer.weight", "output_layer.bias"):
+                    if value.ndim == 0 or value.shape[0] != 2:
+                        raise RuntimeError(
+                            f"Expected two output rows in weight_mlp.{suffix}, "
+                            f"got {tuple(value.shape)}."
+                        )
+                    value = value[index:index + 1]
+                if value.shape != target.shape:
+                    raise RuntimeError(
+                        f"Cannot migrate weight_mlp.{suffix} to {branch}.{suffix}: "
+                        f"shape {tuple(value.shape)} != {tuple(target.shape)}. "
+                        "Check weight_mlp_kwargs, including sin_emb_dim."
+                    )
+                # Copy Fourier features too, and give the two branches independent storage.
+                converted[f"{branch}.{suffix}"] = value.clone()
+
+        # Change the checkpoint only after both branches have passed validation.
+        for key in legacy_keys:
+            del state_dict[key]
+        state_dict.update(converted)
 
     def forward(self, graph, s, t):
         """Return the coordinate and lattice endpoints under keys f/l."""
         return self.pi(graph, s, t)
 
+    # def weighted_loss(self, losses, s, t):
+    #     """Flow Maps log weights, one column each for coordinates and lattice."""
+    #     if not self.use_weight_mlp:
+    #         return {key: losses[key].mean() for key in ("f", "l")}
+    #     weight = self.weight_mlp(s, t)
+    #     return {
+    #         key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
+    #         for i, key in enumerate(("f", "l"))
+    #     }
     def weighted_loss(self, losses, s, t):
         """Flow Maps log weights, one column each for coordinates and lattice."""
         if not self.use_weight_mlp:
             return {key: losses[key].mean() for key in ("f", "l")}
-        weight = self.weight_mlp(s, t)
-        return {
-            key: (torch.exp(-weight[:, i]) * losses[key] + weight[:, i]).mean()
-            for i, key in enumerate(("f", "l"))
-        }
+        weight_f = self.weight_mlp_f(s, t).squeeze(-1)
+        weight_l = self.weight_mlp_l(s, t).squeeze(-1)
+        weighted_loss = {}
+        for i, key in enumerate(("f", "l")):
+            if key == "f":
+                weight = weight_f
+            else:
+                weight = weight_l
+            weighted_loss[key] = (torch.exp(-weight) * losses[key] + weight).mean()
+        return weighted_loss
 
     def sample_training_pair(self, graph1, graph0=None, *, t=None):
         """Return (t, graph_t, target_graph), with times of shape (B, 1)."""
@@ -188,13 +259,27 @@ class LitCSPFlowMap(L.LightningModule):
         else:
             pi = self.pi
         # return self.flow_map.sample_euler(graph0, pi, n_steps=n_steps, t_max_clip=0.99, pc=True, pc_steps=2)
+        pc = False
         return self.flow_map.sample(graph0, pi, n_steps=n_steps, t_max_clip=1, pc=pc, pc_steps=3)
 
     def configure_optimizers(self):
+        # parameters = [parameter for parameter in self.parameters() if parameter.requires_grad]
+        # opt = torch.optim.AdamW(
+        #     parameters,
+        #     lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-2,
+        # )
+        parameters = [
+            *self.pi.parameters(),
+            *(self.weight_mlp_f.parameters() if self.use_weight_mlp else []),
+            *(self.weight_mlp_l.parameters() if self.use_weight_mlp else []),
+                ]
         opt = torch.optim.AdamW(
-            [*self.pi.parameters(), *(self.weight_mlp.parameters() if self.use_weight_mlp else [])], # weight_mlp parameters are only used if use_weight_mlp is True
-            lr=self.lr, amsgrad=True, foreach=True, weight_decay=1e-2,
-        )
+                parameters,
+                lr=self.lr,
+                amsgrad=True,
+                foreach=True,
+                weight_decay=1e-12,
+            )
 
         min_lr_ratio = 0.01
         total_steps = int(self.trainer.estimated_stepping_batches)
@@ -214,4 +299,3 @@ class LitCSPFlowMap(L.LightningModule):
                 "frequency": 1,
             }
         }
-

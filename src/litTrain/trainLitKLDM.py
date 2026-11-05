@@ -36,7 +36,7 @@ from src.device import get_default_device, get_lightning_accelerator
 # --------------------------------------------------------------------------- #
 total_time = 2.0
 dim = 3
-n_epoch = 3000
+n_epoch = 1500
 lr = 1e-3
 batch_size = 256
 num_workers = 1
