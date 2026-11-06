@@ -235,6 +235,21 @@ class LitCSPFlowMap(L.LightningModule):
     def test_step(self, batch, batch_idx=0):
         return self._shared_step(batch, "test")
 
+    def on_train_start(self):
+        # Extend the restored cosine horizon without changing the current LR,
+        # Adam moments, weight decay, or scheduler progress.
+        scheduler = self.lr_schedulers()
+        scheduler._schedulers[1].T_max = (
+            int(self.trainer.estimated_stepping_batches) - scheduler._milestones[0]
+        )
+
+    def on_train_batch_start(self, batch, batch_idx):
+        group = self.trainer.optimizers[0].param_groups[0]
+        self.log_dict(
+            {"train/lr": group["lr"], "train/weight_decay": group["weight_decay"]},
+            on_step=True, on_epoch=False,
+        )
+
     def on_train_batch_end(self, outputs, batch, batch_idx):
         if (
                 self.ema_pi is not None

@@ -21,6 +21,10 @@ class Weight_MLP_Linear(nn.Module):
         return self.output_layer(mp_sum(embed_s, embed_t))
 
 
+# Keep the existing import name compatible with the linear weight network.
+Weight_MLP = Weight_MLP_Linear
+
+
 class Weight_MLP_SiLU(nn.Module):
     """CFM log weights from shared Fourier features and an MP output layer."""
 
