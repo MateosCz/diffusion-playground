@@ -17,6 +17,7 @@ import src.dataLib.transform as T
 from src.dataLib.data_util import PyGData_to_Structure, kldm_output_to_structures_batch
 from src.dataLib.realCrystal import CrystalDataset
 from src.nn.ACSPNet import Ambient_CSPNet
+from src.nn.ACSPNet_Token import Ambient_CSPNet_Token
 from src.flow_maps.vfm_flowmap import VFMFlowMap
 from src.flow_matching.vfm import VFM
 from src.flow_matching.rg_vfm import RGVFM
@@ -81,17 +82,18 @@ nn_kwargs = {
     "num_layers": 6,
     # "num_layers": 4,
     # "num_layers": 4,
-    "h_dim": 512,       # embedding table size for atom types (indexed by atomic number)
+    "h_dim": 512,       # embedding table size for atom types (indexed by atomic number) (should be the same as the number of atom types)
     # "num_freqs": 128,
     "dis_emb_dim": 128,
     "ln": True,
-    "smooth": False,    # embed discrete atom types via nn.Embedding
+    # "smooth": False,    # embed discrete atom types via nn.Embedding
     "pred_h": False,    # <-- do not predict atom types
     "pred_l": True,
     "f_dim": 2 * dim,
     "radii_emb_dim": 128,
     # "neighbor_head": True,
     # "neighbor_hidden_dim": 128,
+    "atom_type_rep": "subatomic_tokenizer_pca_16",
     "weight_mlp_kwargs": {
         "sin_emb_dim": 256,
     },
@@ -133,8 +135,11 @@ def build_transform() -> PyGT.Compose:
     )
 
 
-def build_model() -> Ambient_CSPNet:
-    return Ambient_CSPNet(**{
+def build_model() -> Ambient_CSPNet | Ambient_CSPNet_Token:
+    # return Ambient_CSPNet(**{
+    #     key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"
+    # })
+    return Ambient_CSPNet_Token(**{
         key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"
     })
 

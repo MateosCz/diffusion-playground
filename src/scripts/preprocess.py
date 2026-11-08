@@ -50,6 +50,11 @@ def parse_args() -> argparse.Namespace:
         default=-1,
         help="Skip structures with more than this many atoms (-1 keeps all).",
     )
+    parser.add_argument(
+        "--encoding-type",
+        default="subatomic_tokenizer_pca_16",
+        help="Type of atom type encoding to use.",
+    )
     return parser.parse_args()
 
 
@@ -74,6 +79,7 @@ def main() -> None:
         output_folder=args.output_folder,
         splits=args.splits,
         max_atoms=args.max_atoms,
+        encoding_type=args.encoding_type,
     )
 
     print("Done.")

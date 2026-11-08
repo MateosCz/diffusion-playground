@@ -259,5 +259,3 @@ class Pos2Angle(BaseTransform):
 
     def invert_one(self, angle: np.ndarray):
         return angle_to_pos(angle)
-
-    

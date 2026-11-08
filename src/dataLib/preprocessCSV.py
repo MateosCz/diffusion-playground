@@ -20,6 +20,12 @@ from tqdm import tqdm
 
 from src.dataLib.data_util import save_json
 
+from src.dataLib.type_encoding import build_type_encoding
+from src.dataLib.type_encoding_state import (
+    export_type_encoding,
+    restore_type_encoding,
+)
+
 
 def lattice_params_to_matrix(a, b, c, alpha, beta, gamma):
     """Converts lattice from abc, angles to matrix.
@@ -50,7 +56,7 @@ def lattice_params_to_matrix(a, b, c, alpha, beta, gamma):
 
 def process_cif(crystal_str: str) -> dict[str, np.ndarray]:
     crystal = Structure.from_str(crystal_str, fmt="cif")
-    crystal = crystal.get_reduced_structure()
+    crystal = crystal.get_reduced_structure() # niggli reduction
 
     canonical_crystal = Structure(
         lattice=Lattice.from_parameters(*crystal.lattice.parameters),
@@ -77,11 +83,42 @@ def process_cif(crystal_str: str) -> dict[str, np.ndarray]:
 def preprocess_matcsv(csv_folder: str,
     output_folder: str = None,
     splits: Literal["train", "val", "test"] = "train",
+    encoding_type: Literal["subatomic_tokenizer_pca_16", "subatomic_tokenizer_pca_8", "subatomic_tokenizer_pca_24", "subatomic_tokenizer_raw", "atomic_number","older_default_atmoic_number"] = "subatomic_tokenizer_pca_16",
     max_atoms: int = -1
 ):
     """
     preprocess the csv file
     """
+
+    # prepare the subatomic tokenizer encoders
+    if encoding_type != "older_default_atmoic_number":
+        csv_folder = Path(csv_folder)
+        output_folder = (Path(output_folder) if output_folder is not None else csv_folder) / "tokenized"
+        encoding_dir = output_folder
+        encoding_dir.mkdir(parents=True, exist_ok=True)
+        if encoding_type == "subatomic_tokenizer_pca_16":
+            encoding_path = encoding_dir / "subatomic_tokenizer_pca_16.pt"
+        elif encoding_type == "subatomic_tokenizer_pca_8":
+            encoding_path = encoding_dir / "subatomic_tokenizer_pca_8.pt"
+        elif encoding_type == "subatomic_tokenizer_pca_24":
+            encoding_path = encoding_dir / "subatomic_tokenizer_pca_24.pt"
+        elif encoding_type == "subatomic_tokenizer_raw":
+            encoding_path = encoding_dir / "subatomic_tokenizer_raw.pt"
+        elif encoding_type == "atomic_number":
+            encoding_path = encoding_dir / "atomic_number.pt"
+        else:
+            raise ValueError(f"Invalid encoding type: {encoding_type}")
+        if encoding_path.exists():
+            # load the existing encoding state without rerunning the PCA fitting
+            encoding_state = torch.load(encoding_path, map_location="cpu", weights_only=True)
+            encoder = restore_type_encoding(encoding_state)
+        else:
+            # fit the PCA and save the encoding state
+            encoder = build_type_encoding(encoding_type, vz=100) # use max 100 atomic numbers for the encoding
+            encoding_state = export_type_encoding(encoder)
+            torch.save(encoding_state, encoding_path)
+
+    # preprocess the csv file
     for split in tqdm(splits):
         csv_file = os.path.join(csv_folder, f"{split}.csv")
         df = pd.read_csv(csv_file, index_col=0)
@@ -106,6 +143,11 @@ def preprocess_matcsv(csv_folder: str,
                 lengths = torch.tensor(cif_info["lengths"]).view(1, -1), #  Å
                 angles = torch.tensor(cif_info["angles"]).view(1, -1) # degrees
             )
+            if encoding_type != "older_default_atmoic_number":
+                data.avec = encoder.encode_from_A0(
+                    data.h.long(),
+                    pad_mask=torch.zeros_like(data.h, dtype=torch.bool),
+                )
             data_list.append(data)
         # save path is either the output folder or the csv folder
         save_path = os.path.join(output_folder, f"{split}.pt") if output_folder is not None else os.path.join(csv_folder, f"{split}.pt")

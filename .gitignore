@@ -11,3 +11,4 @@ data/*/*.pt
 .DS_Store
 *.out
 *.err
+data/*/tokenized/
