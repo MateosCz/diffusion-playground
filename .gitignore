@@ -2,3 +2,7 @@
 __pycache__/
 wandb_logs/
 src/__pycache__/
+slurm_scripts/
+checkpoints/
+*.out
+*.err
