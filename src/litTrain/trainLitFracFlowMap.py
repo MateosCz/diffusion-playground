@@ -1,0 +1,235 @@
+"""Train an extrinsic flow map on checkerboard or pacman data."""
+
+from datetime import datetime
+
+import lightning as L
+import torch
+import wandb
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.loggers import WandbLogger
+from torch.utils.data import DataLoader, Dataset
+
+from src.dataLib.synthetic import (
+    Checkerboard_Dataset,
+    Pacman_Dataset,
+)
+from src.device import get_default_device, get_lightning_accelerator
+from src.flow_matching import RGVFM
+from src.flow_maps.vfm_flowmap import VFMFlowMap
+from src.lit.checkerboard_generation_metrics import CheckerboardGenerationMetrics
+from src.lit.callbacks import last_checkpoint
+from src.lit.litFracFlowMap import LitFracFlowMapNN
+from src.manifolds import FlatTorus01
+from src.nn.frac_flowmapNN import ExFlowMapNN
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+total_time = 1.0
+dim = 2  # Checkerboard dimension; pacman always uses 2.
+n_epoch = 1000
+lr = 1e-4
+batch_size = 512
+eta = 0.5  # Fraction of samples used for the diagonal (tangent) loss.
+num_workers = 6
+num_rows = 4
+
+dataset_name = "checkerboard"  # "checkerboard" or "pacman"
+if dim == 2 and dataset_name == "checkerboard":
+    dataset_name = f"checkerboard_{num_rows}x{num_rows}"
+elif dim == 1 and dataset_name == "checkerboard":
+    dataset_name = f"checkerboard_{num_rows}"
+
+pacman_path = "data/pacman.npy"
+train_size = 40_000
+val_size = 4_096
+
+flow_kwargs = {
+    "time_distribution": "uniform",
+    "t_min": 0.0,
+}
+
+rg_vfm_kwargs = {
+    "total_time": total_time,
+    "time_eps": 1e-3,
+    "noise_scale": 0.0,
+    "max_velocity_scale": None,
+    "max_loss_weight": 100.0,
+    "normalize_loss_weights": False,
+    "normalize_loss": False,
+    "support": "extrinsic",  # VFMFlowMap currently uses ambient-space updates.
+    # "intrinsic_prior_std": 1.0,
+    "integrator": "euler",
+    "is_loss_weighted": True,
+    "ambient_metric": "euclidean",
+}
+
+nn_kwargs = {
+    "x_lifting_dim": 256,
+    "time_embedding_half_dim": 128,
+    "hidden_dim": [512, 1024, 512],
+    "total_time": total_time,
+    "time_input_dim": 2,
+    "time_embedding_scale": 1.0,
+    "with_residual_position": True,
+    "with_sincos_position": False,
+    "residual_position_scale": 0.01,
+    "project_to_manifold": False,
+}
+
+generation_eval_every_n_epochs = 25
+generation_eval_samples = 4_096
+generation_eval_steps = 15
+
+
+def build_dataset(name: str, size: int, *, seed: int | None = None) -> Dataset:
+    """Create fractional-coordinate data directly in ``[0, 1)``."""
+    if name.startswith("checkerboard"):
+        base_dataset = Checkerboard_Dataset(
+            num_rows=num_rows,
+            dataset_size=size,
+            seed=seed,
+            dim=dim,
+        )
+    elif name == "pacman":
+        base_dataset = Pacman_Dataset(
+            directory=pacman_path,
+            size=size,
+            seed=seed,
+        )
+    else:
+        raise ValueError(
+            f"dataset_name must start with 'checkerboard' or equal 'pacman', got {name!r}"
+        )
+    return base_dataset
+
+
+def build_loaders() -> tuple[DataLoader, DataLoader]:
+    train_dataset = build_dataset(dataset_name, train_size)
+    val_dataset = build_dataset(dataset_name, val_size, seed=10_000)
+    common_kwargs = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "persistent_workers": num_workers > 0,
+        "pin_memory": torch.cuda.is_available(),
+    }
+    train_loader = DataLoader(train_dataset, shuffle=True, drop_last=True, **common_kwargs)
+    val_loader = DataLoader(val_dataset, shuffle=False, drop_last=True, **common_kwargs)
+    return train_loader, val_loader
+
+
+def build_manifold(manifold_dim: int | None = None) -> FlatTorus01:
+    """Build the canonical ``[0, 1)`` torus for fractional coordinates."""
+    if manifold_dim is None:
+        manifold_dim = 2 if dataset_name == "pacman" else dim
+    return FlatTorus01(dim=manifold_dim)
+
+
+def build_model(manifold: FlatTorus01 | None = None) -> ExFlowMapNN:
+    manifold = manifold or build_manifold()
+    return ExFlowMapNN(
+        **build_nn_kwargs(manifold),
+        manifold=manifold,
+    )
+
+
+def build_nn_kwargs(manifold: FlatTorus01) -> dict:
+    return dict(nn_kwargs, dim=manifold.ambient_dim, output_dim=manifold.ambient_dim)
+
+
+def build_rg_vfm(manifold: FlatTorus01 | None = None) -> RGVFM:
+    manifold = manifold or build_manifold()
+    return RGVFM(manifold, **rg_vfm_kwargs)
+
+
+def main() -> None:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    device = get_default_device()
+    accelerator = get_lightning_accelerator(device)
+    train_loader, val_loader = build_loaders()
+    manifold = build_manifold()
+    rg_vfm = build_rg_vfm(manifold)
+    model_kwargs = build_nn_kwargs(manifold)
+
+    experiment_name = f"FracFlowMap_{dataset_name}_extrinsic_eta_{eta}"
+    checkpoint_dir = f"checkpoints/{timestamp}/{experiment_name}"
+    lit_model = LitFracFlowMapNN(
+        pi=build_model(manifold),
+        eta=eta,
+        rg_vfm=rg_vfm,
+        flow_map=VFMFlowMap(rg_vfm),
+        flow_kwargs=flow_kwargs,
+        rg_vfm_kwargs=rg_vfm_kwargs,
+        nn_kwargs=model_kwargs,
+        experiment_name_timestamp=f"{experiment_name}_{timestamp}",
+        batch_size=batch_size,
+        lr=lr,
+    )
+    wandb_logger = WandbLogger(
+        name=experiment_name,
+        save_dir="wandb_logs",
+        project="diffusion-playground",
+        checkpoint_name=experiment_name,
+    )
+    loss_checkpoint = ModelCheckpoint(
+        dirpath=checkpoint_dir,
+        filename="flowmap_{epoch:04d}-{val_total_loss:.6f}",
+        monitor="val_total_loss",
+        mode="min",
+        save_top_k=1,
+        save_last=False,
+        auto_insert_metric_name=False,
+    )
+    callbacks: list[L.Callback] = [
+        loss_checkpoint,
+        last_checkpoint(checkpoint_dir),
+    ]
+    if dataset_name.startswith("checkerboard"):
+        callbacks.extend(
+            [
+                CheckerboardGenerationMetrics(
+                    num_rows=num_rows,
+                    bins=4 * num_rows,
+                    n_samples=generation_eval_samples,
+                    n_steps=generation_eval_steps,
+                    every_n_epochs=generation_eval_every_n_epochs,
+                ),
+                ModelCheckpoint(
+                    dirpath=checkpoint_dir,
+                    filename=(
+                        "flowmap_distribution_"
+                        "{epoch:04d}-{val_generated_tv:.6f}"
+                    ),
+                    monitor="val_generated_tv",
+                    mode="min",
+                    save_top_k=1,
+                    every_n_epochs=generation_eval_every_n_epochs,
+                    auto_insert_metric_name=False,
+                ),
+            ]
+        )
+
+    trainer = L.Trainer(
+        logger=wandb_logger,
+        # Validation/test losses need dX/dt from JVP, even without parameter updates.
+        inference_mode=False,
+        max_epochs=n_epoch,
+        accelerator=accelerator,
+        log_every_n_steps=32,
+        gradient_clip_val=1.0,
+        callbacks=callbacks,
+    )
+
+    try:
+        trainer.fit(
+            model=lit_model,
+            train_dataloaders=train_loader,
+            val_dataloaders=val_loader,
+        )
+    finally:
+        wandb.finish()
+
+
+if __name__ == "__main__":
+    main()

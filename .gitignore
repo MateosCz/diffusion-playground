@@ -2,7 +2,16 @@
 __pycache__/
 wandb_logs/
 src/__pycache__/
-slurm_scripts/
+*.s
+*.out
+data/*/*.pt
+/checkpoints/
+/src/SDECourse_exercises/
+/reports
+.DS_Store
+*.out
+*.err
+data/*/tokenized/slurm_scripts/
 checkpoints/
 *.out
 *.err

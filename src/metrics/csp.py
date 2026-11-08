@@ -1,0 +1,67 @@
+import numpy as np
+from pymatgen.analysis.structure_matcher import StructureMatcher
+from pymatgen.core import Structure
+
+from .common import validity_structure
+from ..utils import safe_divide
+
+
+class CSPMetrics:
+    def __init__(self, stol: float = 0.5, angle_tol: float = 10.0, ltol: float = 0.3):
+        self.matcher = StructureMatcher(stol=stol, angle_tol=angle_tol, ltol=ltol)
+
+        self.valid = ...
+        self.match = ...
+        self.rmse = ...
+
+        self.reset()
+
+    def __call__(self, input_s: list[Structure], target_s: list[Structure]):
+        return self.update(input_s, target_s)
+
+    def update(self, input_s: list[Structure], target_s: list[Structure]):
+
+        assert len(input_s) == len(target_s)
+
+        for si, st in zip(input_s, target_s):
+            v, m = 0, 0
+            rmse = None
+            if si is not None:
+                v = validity_structure(si)
+                if v:
+                    try:
+                        rms = self.matcher.get_rms_dist(si, st)
+                    except np.linalg.LinAlgError:
+                        # Early samples can have lattices that pass basic validity
+                        # checks but are too ill-conditioned for Niggli reduction.
+                        rms = None
+                    m = int(rms is not None)
+
+                    if rms is not None:
+                        rmse = rms[0]
+
+            self.match.append(m)
+            self.valid.append(v)
+            self.rmse.append(rmse)  # Keep one entry per structure, including misses.
+
+    def summarize(self) -> dict:
+        summary = {}
+
+        summary["valid"] = safe_divide(sum(self.valid), len(self.valid))
+        summary["match_rate"] = safe_divide(sum(self.match), len(self.match))
+        # Missing matches do not contribute to either the sum or its denominator.
+        matched_rmse = [value for value in self.rmse if value is not None]
+        summary["rmse"] = safe_divide(sum(matched_rmse), len(matched_rmse)) if matched_rmse else None
+
+        return summary
+    
+
+    def reset(self):
+        self.valid = []
+        self.match = []
+        self.rmse = []
+
+    @property
+    def details(self) -> dict:
+        """Aligned per-structure records; unmatched displacements are None."""
+        return {"valid": self.valid, "match": self.match, "rmse": self.rmse}

@@ -4,9 +4,10 @@ from torch.utils.data import DataLoader
 
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
-from src.data import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
-from src.scoreNN import TDM_SimpleScoreMLP
-from src.diffusion import TDMDiffusion
+from src.dataLib.synthetic import Checkerboard_Dataset, TorusLieWrapper, AngleTorusWrapper, Pacman_Dataset
+from src.nn.scoreNN import TDM_SimpleScoreMLP
+from src.diffusion.tdm import TDMDiffusion
+from src.device import get_default_device
 
 
 def time_loss_weight(t, total_time):
@@ -148,7 +149,7 @@ def main():
     # -----------------------
     # Config (simple defaults)
     # -----------------------
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_default_device()
     batch_size = 512
     n_epoch = 2000
     lr = 8e-4
@@ -167,7 +168,7 @@ def main():
     hidden_dim = [512,1024,512]
     output_dim = dim
     # dataset
-    if base_ds_kw == "checkerboard":
+    if base_ds_kw.startswith("checkerboard"):
         base_ds = Checkerboard_Dataset(
             num_rows=4,
             dataset_size=50000
@@ -184,7 +185,7 @@ def main():
         batch_size=batch_size,
         shuffle=True,
     )
-    if base_ds_kw == "checkerboard":
+    if base_ds_kw.startswith("checkerboard"):
         val_base_ds = Checkerboard_Dataset(
             num_rows=4,
             dataset_size=4096

@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import scatter
-from src.data import scatter_center
+from src.dataLib.synthetic import scatter_center
 from typing import Sequence, Union
 
 import src.nn.scoreNNBlock as Block

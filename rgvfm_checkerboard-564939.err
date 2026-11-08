@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 241, in <module>
+    main()
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 159, in main
+    train_loader, val_loader = build_loaders()
+                               ^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 113, in build_loaders
+    train_dataset = build_dataset(dataset_name, train_size)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jizho/projects/diffusion-playground/src/litTrain/trainLitRGVFMMLP.py", line 106, in build_dataset
+    raise ValueError(
+ValueError: dataset_name must be 'checkerboard' or 'pacman', got 'checkerboard_4x4'

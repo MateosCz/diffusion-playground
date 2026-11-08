@@ -1,16 +1,16 @@
 
 === triangle-fit residual (lower = more triangle-like) ===
 GT              n=300  median=0.0000  IQR=[0.0000,0.0000]  W1(vs GT)=0.0000
-zero_cog_score  n=300  median=0.0197  IQR=[0.0132,0.0375]  W1(vs GT)=0.0353
-no_zero_cog_score  n=300  median=0.0131  IQR=[0.0092,0.0245]  W1(vs GT)=0.0253
-no_zero_cog     n=300  median=0.0396  IQR=[0.0195,0.1088]  W1(vs GT)=0.0824
+zero_cog_score  n=300  median=0.0206  IQR=[0.0129,0.0393]  W1(vs GT)=0.0349
+no_zero_cog_score  n=300  median=0.0135  IQR=[0.0099,0.0251]  W1(vs GT)=0.0256
+no_zero_cog     n=300  median=0.0427  IQR=[0.0215,0.1207]  W1(vs GT)=0.0856
 
-KS(zero_cog_score vs no_zero_cog_score): D=0.270  p=5.02e-10
+KS(zero_cog_score vs no_zero_cog_score): D=0.247  p=2.02e-08
 KS(zero_cog_score vs GT):          D=1.000
 KS(no_zero_cog_score vs GT):       D=1.000
 KS(no_zero_cog vs GT):       D=1.000
 
 === superimposed RMS point-to-GT-edge (lower = better) ===
-zero_cog_score     n=300  median=0.0520  IQR=[0.0394,0.0844]
-no_zero_cog_score  n=300  median=0.0505  IQR=[0.0408,0.0659]
-no_zero_cog        n=300  median=0.0815  IQR=[0.0436,0.1529]
+zero_cog_score     n=300  median=0.0536  IQR=[0.0384,0.0862]
+no_zero_cog_score  n=300  median=0.0524  IQR=[0.0423,0.0673]
+no_zero_cog        n=300  median=0.0895  IQR=[0.0517,0.1724]

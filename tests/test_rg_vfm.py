@@ -1,0 +1,211 @@
+import torch
+
+from src.flow_matching.rg_vfm import RGVFM
+from src.manifolds.flat_torus import FlatTorus01
+
+
+def make_flow(**kwargs):
+    return RGVFM(
+        FlatTorus01(dim=1),
+        max_velocity_scale=None,
+        **kwargs,
+    )
+
+
+def test_forward_sample_returns_x_T_target_and_time():
+    flow = make_flow()
+    x0 = torch.tensor([[0.9], [0.2]])
+    x1 = torch.tensor([[0.1], [0.8]])
+    ts = torch.tensor([[0.5], [0.25]])
+
+    x_t, target, returned_t = flow.sample_forward(
+        x1,
+        x0=x0,
+        ts=ts,
+        return_time=True,
+    )
+
+    torch.testing.assert_close(x_t, torch.tensor([[0.0], [0.1]]), atol=1e-6, rtol=0)
+    torch.testing.assert_close(target, x1)
+    torch.testing.assert_close(returned_t, ts)
+
+
+def test_intrinsic_prior_is_wrapped_normal():
+    std = 0.125
+    flow = make_flow(intrinsic_prior_std=std)
+    like = torch.zeros(8, 1, dtype=torch.float64)
+
+    torch.manual_seed(123)
+    expected = flow.manifold.wrap(std * torch.randn_like(like))
+    torch.manual_seed(123)
+    prior = flow.sample_prior(like)
+
+    torch.testing.assert_close(prior, expected)
+    assert torch.all((0 <= prior) & (prior < 1))
+
+
+def test_intrinsic_prior_std_must_be_positive():
+    for std in (0.0, -1.0):
+        try:
+            make_flow(intrinsic_prior_std=std)
+        except ValueError as error:
+            assert "intrinsic_prior_std must be positive" in str(error)
+        else:
+            raise AssertionError("expected invalid intrinsic prior scale to fail")
+
+
+def test_flow_matching_training_api_is_time_first():
+    flow = make_flow()
+    x0 = torch.tensor([[0.9], [0.2]])
+    x1 = torch.tensor([[0.1], [0.8]])
+    ts = torch.tensor([[0.5], [0.25]])
+
+    returned_t, x_t, target = flow.sample_training_pair(x1, x0, t=ts)
+
+    torch.testing.assert_close(returned_t, ts)
+    torch.testing.assert_close(x_t, torch.tensor([[0.0], [0.1]]), atol=1e-6, rtol=0)
+    torch.testing.assert_close(target, x1)
+
+
+def test_forward_can_return_shortest_geodesic_trajectory():
+    flow = make_flow()
+    x0 = torch.tensor([[0.9]])
+    x1 = torch.tensor([[0.1]])
+
+    trajectory, targets, times = flow.sample_forward(
+        x1,
+        x0=x0,
+        sample_trajectory=True,
+        n_steps=4,
+        return_time=True,
+    )
+
+    expected = torch.tensor([[[0.9]], [[0.95]], [[0.0]], [[0.05]], [[0.1]]])
+    torch.testing.assert_close(trajectory, expected, atol=1e-6, rtol=0)
+    torch.testing.assert_close(targets, x1.unsqueeze(0).expand_as(trajectory))
+    torch.testing.assert_close(times, torch.linspace(0, 1, 5))
+
+
+def test_loss_uses_geodesic_distance_across_periodic_boundary():
+    flow = make_flow()
+    pred = torch.tensor([[0.95]])
+    target = torch.tensor([[0.05]])
+
+    torch.testing.assert_close(flow.loss(pred, target), torch.tensor(0.01))
+
+
+def test_loss_applies_inverse_squared_remaining_time_per_sample():
+    flow = make_flow()
+    pred = torch.tensor([[0.1], [0.2]])
+    target = torch.zeros_like(pred)
+    times = torch.tensor([[0.0], [0.5]])
+
+    loss = flow.loss(pred, target, t=times)
+
+    # (0.1^2 / (1 - 0)^2 + 0.2^2 / (1 - 0.5)^2) / 2
+    torch.testing.assert_close(loss, torch.tensor(0.085))
+
+
+def test_loss_caps_and_batch_normalizes_time_weights():
+    flow = make_flow(max_loss_weight=100.0, normalize_loss_weights=True)
+    pred = torch.tensor([[0.1], [0.2]])
+    target = torch.zeros_like(pred)
+    times = torch.tensor([[0.0], [0.99]])
+
+    loss = flow.loss(pred, target, t=times)
+
+    capped_weights = torch.tensor([1.0, 100.0])
+    normalized_weights = capped_weights / capped_weights.mean()
+    expected = (normalized_weights * pred.squeeze(-1).pow(2)).mean()
+    torch.testing.assert_close(loss, expected)
+
+
+def test_max_loss_weight_must_be_positive():
+    for max_weight in (0.0, -1.0):
+        try:
+            make_flow(max_loss_weight=max_weight)
+        except ValueError as error:
+            assert "max_loss_weight must be positive or None" in str(error)
+        else:
+            raise AssertionError("expected invalid maximum loss weight to fail")
+
+
+def test_loss_rejects_time_at_terminal_endpoint():
+    flow = make_flow()
+    pred = torch.tensor([[0.1]])
+    target = torch.tensor([[0.0]])
+
+    try:
+        flow.loss(pred, target, t=torch.tensor([[1.0]]))
+    except ValueError as error:
+        assert "undefined at or after total_time" in str(error)
+    else:
+        raise AssertionError("expected terminal-time loss to fail")
+
+
+def test_backward_step_converts_x_T_to_velocity():
+    flow = make_flow()
+    x_t = torch.tensor([[0.9]])
+    x_T = torch.tensor([[0.1]])
+
+    x_next = flow.sample_backward_step(x_t, t=0.0, pred=x_T, dt=0.25)
+
+    torch.testing.assert_close(x_next, torch.tensor([[0.95]]), atol=1e-6, rtol=0)
+
+
+def test_backward_sampling_reaches_constant_predicted_x_T_and_tracks_path():
+    flow = make_flow()
+    x0 = torch.tensor([[0.9], [0.2]])
+    x_T = torch.tensor([[0.1], [0.8]])
+
+    def x_T_model(x_t, t):
+        assert t.shape == (x_t.shape[0], 1)
+        return x_T
+
+    trajectory, times = flow.sample_backward(
+        x0,
+        x_T_model,
+        n_steps=4,
+        sample_trajectory=True,
+        return_time=True,
+    )
+
+    torch.testing.assert_close(trajectory[-1], x_T, atol=1e-6, rtol=0)
+    assert trajectory.shape == (5, 2, 1)
+    torch.testing.assert_close(times, torch.linspace(0, 1, 5))
+
+
+def test_canonical_sample_uses_time_first_model():
+    flow = make_flow()
+    x0 = torch.tensor([[0.9], [0.2]])
+    x_T = torch.tensor([[0.1], [0.8]])
+
+    def x_T_model(t, x_t):
+        assert t.shape == (x_t.shape[0], 1)
+        return x_T
+
+    times, trajectory = flow.sample(
+        x_T_model,
+        x0,
+        n_steps=4,
+        return_trajectory=True,
+    )
+
+    torch.testing.assert_close(trajectory[-1], x_T, atol=1e-6, rtol=0)
+    torch.testing.assert_close(times, torch.linspace(0, 1, 5))
+
+
+def test_stabilized_x_T_field_supports_higher_order_integrators():
+    x0 = torch.tensor([[0.2]])
+
+    for method in ("heun", "rk4"):
+        flow = RGVFM(FlatTorus01(dim=1), integrator=method)
+        times, trajectory = flow.sample(
+            lambda t, x: torch.full_like(x, 0.4),
+            x0,
+            n_steps=4,
+            return_trajectory=True,
+        )
+        assert times.shape == (5,)
+        assert trajectory.shape == (5, 1, 1)
+        assert torch.isfinite(trajectory).all()

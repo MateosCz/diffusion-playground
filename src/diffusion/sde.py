@@ -76,10 +76,10 @@ class BaseSDE(ABC, nn.Module):
         g = self.diffusion(zt,t)
         """
         when eta is 0, then the reverse diffusion sample the probability flow ODE:
-        dx = (f(x,t) - 1/2 g(x,t) * g(x,t)^T * score) dt + g(x,t) dW
-        rather than from SDE:
+        dx = (f(x,t) - 1/2 g(x,t) * g(x,t)^T * score) dt
+        if eta is None then eta = g, then the reverse diffusion sample the SDE:
         dx = (f(x,t) - g(x,t) * g(x,t)^T * score) dt + g(x,t) dW
-        
+
         """
         if eta is None: 
             eta = g
@@ -106,7 +106,7 @@ class VPSDE(BaseSDE):
         beta = self.schedule.beta(t)
         return -0.5 * beta * x
 
-    def diffusion(self, t: torch.Tensor):
+    def diffusion(self, x: torch.Tensor, t: torch.Tensor):
         beta = self.schedule.beta(t)
         return torch.sqrt(beta)
 
@@ -126,6 +126,8 @@ class VPSDE(BaseSDE):
         beta_integral = torch.abs(beta_integral) # make sure beta_integral is positive
         sigma_t = torch.sqrt(1-torch.exp(-beta_integral) + 1e-6)
         return sigma_t
+
+
         
         
             

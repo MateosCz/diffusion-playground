@@ -1,0 +1,39 @@
+/home/jizho/projects/diffusion-playground/src/dataLib/realCrystal.py:30: UserWarning: Weights only load failed. Please file an issue to make `torch.load(weights_only=True)` compatible in your case. Please use `torch.serialization.add_safe_globals([torch_geometric.data.data.DataTensorAttr])` to allowlist this global.
+  return fs.torch_load(path)
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python /home/jizho/projects/diffusion-playground/src/litTra ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+You are using a CUDA device ('NVIDIA RTX A5000') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/jizho/.netrc.
+wandb: Currently logged in as: zjccharles to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run p17h3fz7
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in wandb_logs/wandb/run-20261023_132243-p17h3fz7
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run ACSPVNet_FlowMap_mp-20_eta_0.75_lambda_l_0.05_lambda_f_1.5_beta_l_1.0_beta_f_1.0_zeroinitNN
+wandb: ⭐️ View project at https://wandb.ai/zjccharles/diffusion-playground
+wandb: 🚀 View run at https://wandb.ai/zjccharles/diffusion-playground/runs/p17h3fz7
+Restoring states from the checkpoint path at checkpoints/20261022_182957_cspFlowMap/ACSPVNet_FlowMap_mp-20_eta_0.75_lambda_l_1.0_lambda_f_1.5_beta_l_3.0_beta_f_3.0_zeroinitNN/last.ckpt
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/callbacks/model_checkpoint.py:566: The dirpath has changed from '/home/jizho/projects/diffusion-playground/checkpoints/20261022_182957_cspFlowMap/ACSPVNet_FlowMap_mp-20_eta_0.75_lambda_l_1.0_lambda_f_1.5_beta_l_3.0_beta_f_3.0_zeroinitNN' to '/home/jizho/projects/diffusion-playground/checkpoints/20261023_132232_cspFlowMap/ACSPVNet_FlowMap_mp-20_eta_0.75_lambda_l_0.05_lambda_f_1.5_beta_l_1.0_beta_f_1.0_zeroinitNN', therefore `best_model_score`, `kth_best_model_path`, `kth_value`, `last_model_path` and `best_k_models` won't be reloaded. Only `best_model_path` will be reloaded.
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [1]
+Loading `train_dataloader` to estimate number of stepping batches.
+/home/jizho/projects/diffusion-playground/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+
+  | Name   | Type                                      | Params | Mode  | FLOPs
+-------------------------------------------------------------------------------------
+0 | pi     | Ambient_CSPNet                            | 11.0 M | train | 0    
+1 | rg_vfm | RiemannianGaussianVariationalFlowMatching | 0      | train | 0    
+2 | l_vfm  | VFM                                       | 0      | train | 0    
+3 | ema_pi | AveragedModel                             | 11.0 M | train | 0    
+-------------------------------------------------------------------------------------
+11.0 M    Trainable params
+11.0 M    Non-trainable params
+22.0 M    Total params
+87.957    Total estimated model params size (MB)
+133       Modules in train mode
+0         Modules in eval mode
+0         Total Flops
+Restored all states from the checkpoint at checkpoints/20261022_182957_cspFlowMap/ACSPVNet_FlowMap_mp-20_eta_0.75_lambda_l_1.0_lambda_f_1.5_beta_l_3.0_beta_f_3.0_zeroinitNN/last.ckpt
+slurmstepd: error: *** JOB 620404 ON comp-gpu04 CANCELLED AT 2026-10-24T13:22:10 DUE TO TIME LIMIT ***
