@@ -293,7 +293,7 @@ class LitCSPFlowMap(L.LightningModule):
                 lr=self.lr,
                 amsgrad=True,
                 foreach=True,
-                weight_decay=1e-12,
+                weight_decay=1e-2,
             )
 
         min_lr_ratio = 0.01

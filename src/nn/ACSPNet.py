@@ -104,6 +104,7 @@ class Ambient_CSPLayer(nn.Module):
             dis_emb: nn.Module,
             dis_emb_dim: int,
             hidden_dim: int = 128,
+            l_dim: int = 6,
             act_fn: nn.Module = nn.SiLU(),
             ln: bool = False,
     ):
@@ -113,7 +114,7 @@ class Ambient_CSPLayer(nn.Module):
         self.dis_emb_dim = dis_emb_dim
 
         input_dim = (
-                hidden_dim * 2 + self.dis_emb_dim + 6
+                hidden_dim * 2 + self.dis_emb_dim + l_dim
         )  # hidden states + relative geometry + lattice
 
         self.edge_mlp = nn.Sequential(
@@ -143,10 +144,10 @@ class Ambient_CSPLayer(nn.Module):
 
         hi, hj = node_features[edge_index[0]], node_features[edge_index[1]] # (E, hidden_dim)
 
-        pos_diff = self.dis_emb(pos_diff) # (E, num_freqs * f_dim)
-        l_edge = lattices[edge_graph_index] # (E, 6)
+        pos_diff = self.dis_emb(pos_diff) # (E, dis_emb_dim)
+        l_edge = lattices[edge_graph_index] # (E, l_dim)
 
-        edges_input = torch.cat([hi, hj, l_edge, pos_diff], dim=1) # (E, 2 * hidden_dim + 6 + num_freqs * f_dim)
+        edges_input = torch.cat([hi, hj, l_edge, pos_diff], dim=1) # (E, 2 * hidden_dim + l_dim + dis_emb_dim)
 
         edge_features = self.edge_mlp(edges_input)
         return edge_features # (E, hidden_dim)
@@ -361,7 +362,7 @@ class Ambient_CSPNet(nn.Module):
         source, target = normalized[edge_index[0]], normalized[edge_index[1]] # (E,3,2) R^2xR^2xR^2, each dim in R^2, total 3 dims
         dot = (source * target).sum(-1) # (E,3) 3 dims dot product
         cross = source[..., 0] * target[..., 1] - source[..., 1] * target[..., 0] # (E,3) cross product
-        pos_diff = torch.stack([dot, cross], dim=-1).flatten(start_dim=1) # (E,3,2) rotate invariant dot/cross representation
+        pos_diff = torch.stack([dot, cross], dim=-1).flatten(start_dim=1) # (E,6) rotate invariant dot/cross representation
 
         # pos_diff_features = self.pos_emb(torch.atan2(cross, dot)) # (E, num_freqs * f_dim) f_dim is ambient features dim (3*2=6)
         edge_graph_index = batch[edge_index[0]]

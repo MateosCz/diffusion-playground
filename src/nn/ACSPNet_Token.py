@@ -26,7 +26,7 @@ class Ambient_CSPNet_Token(nn.Module):
             time_dim: int = 128, 
             num_layers: int = 4,
             h_dim: int = 100,
-            # num_freqs: int = 1,
+            num_freqs: int = 32,
             dis_emb_dim: int = 128,
             ln: bool = True,
             atom_type_rep: Literal["subatomic_tokenizer_pca_16", "subatomic_tokenizer_pca_8", "subatomic_tokenizer_pca_24", "subatomic_tokenizer_raw", "atomic_number", "embedding", "one-hot"] = "subatomic_tokenizer_pca_16",
@@ -36,6 +36,11 @@ class Ambient_CSPNet_Token(nn.Module):
             f_dim: int = 6, # ambient (cosine/sine) pairs for 3D data 3x2
             radii_emb_dim: int = 128,
             one_hot_dim: int = 100,
+            time_mlp_output_dim: int = 128,
+            atom_mlp_output_dim: int = 128,
+            lattice_mlp_output_dim: int = 128,
+            posdiff_mlp_output_dim: int = 128,
+
             # neighbor_head: bool = False,
             # composition_context: bool = False,
             # neighbor_hidden_dim: int = 128,
@@ -70,26 +75,55 @@ class Ambient_CSPNet_Token(nn.Module):
             self.atom_type_dim = 100 # use max 100 atomic numbers for the encoding
         elif atom_type_rep == "one-hot":
             self.atom_type_dim = one_hot_dim
+        self.dis_emb_dim = dis_emb_dim
         self.radii_emb_dim = radii_emb_dim
+        self.atom_mlp_output_dim = atom_mlp_output_dim
+        self.lattice_mlp_output_dim = lattice_mlp_output_dim
+        self.posdiff_mlp_output_dim = posdiff_mlp_output_dim
+        self.time_mlp_output_dim = time_mlp_output_dim
         self.radii_emb = nn.Sequential(
             nn.Linear(f_dim // 2, self.radii_emb_dim),
             nn.SiLU(),
+            nn.Linear(self.radii_emb_dim, self.radii_emb_dim),
         )
 
-
-        self.atom_latent_emb = nn.Linear(self.atom_type_dim + 2 * time_dim + self.radii_emb_dim + 6, hidden_dim)
-
-        self.dis_emb_dim = dis_emb_dim
-        # self.pos_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim // 2)
+        
+        self.pos_emb = SinEmbedding(n_frequencies=num_freqs, n_space=f_dim // 2)
         self.dis_emb = nn.Sequential(
-            nn.Linear(f_dim, self.dis_emb_dim),
+            nn.Linear(self.posdiff_mlp_output_dim, self.dis_emb_dim),
             nn.SiLU(),
+            nn.Linear(self.dis_emb_dim, self.dis_emb_dim),
         )
 
         if time_emb is None:
             time_emb = FourierEmbedding(in_features=1, out_features=time_dim)
 
         self.time_emb = time_emb
+
+        self.time_mlp = nn.Sequential(
+            nn.Linear(2*time_dim, time_mlp_output_dim),
+            nn.ReLU(),
+            nn.Linear(time_mlp_output_dim, time_mlp_output_dim),
+            nn.ReLU(),
+            )
+        self.atom_type_emb_mlp = nn.Sequential(
+            nn.Linear(self.atom_type_dim, self.atom_mlp_output_dim),
+            nn.SiLU(),
+            nn.Linear(self.atom_mlp_output_dim, self.atom_mlp_output_dim),
+        )
+        self.lattice_emb_mlp = nn.Sequential(
+            nn.Linear(6, self.lattice_mlp_output_dim),
+            # nn.SiLU(),
+            # nn.Linear(self.lattice_mlp_output_dim, self.lattice_mlp_output_dim),
+        )
+        self.posdiff_emb_mlp = nn.Sequential(
+            nn.Linear(self.f_dim, self.posdiff_mlp_output_dim),
+            nn.SiLU(),
+            nn.Linear(self.posdiff_mlp_output_dim, self.posdiff_mlp_output_dim),
+        )
+        
+        self.atom_latent_emb = nn.Linear(self.atom_mlp_output_dim + self.time_mlp_output_dim + self.radii_emb_dim, hidden_dim)
+
 
         # Message-passing layers
         self.layers = nn.ModuleList(
@@ -98,6 +132,7 @@ class Ambient_CSPNet_Token(nn.Module):
                     dis_emb=self.dis_emb,
                     dis_emb_dim=self.dis_emb_dim,
                     hidden_dim=hidden_dim,
+                    l_dim=self.lattice_mlp_output_dim,
                     act_fn=self.act_fn,
                     ln=ln,
                 )
@@ -159,14 +194,18 @@ class Ambient_CSPNet_Token(nn.Module):
         h = graph.h
         avec = graph.avec
         l = graph.l
+        l_raw = l
         batch = graph.batch
         edge_index = graph.edge_index
         if pos.shape[-1] != self.f_dim:
             raise ValueError(f"graph.pos must have {self.f_dim} ambient features")
 
+        # Use Categorical Flow Maps time embedding style
+        t = t-s
         s = self.time_emb(s)
         t = self.time_emb(t)
         time_per_atom = torch.cat([s, t], dim=-1)[batch]
+        time_per_atom = self.time_mlp(time_per_atom)
 
         pairs = pos.reshape(-1, self.f_dim // 2, 2)
         radii_squared = pairs.square().sum(-1)
@@ -189,7 +228,9 @@ class Ambient_CSPNet_Token(nn.Module):
         #     context = self.composition_context_mlp(
         #         torch.cat([composition, counts.log()], dim=-1),
         #     )
-        node_features = torch.cat([node_features, time_per_atom, radii_features, l[batch]], dim=1) 
+        node_features = self.atom_type_emb_mlp(node_features)
+        l = self.lattice_emb_mlp(l)
+        node_features = torch.cat([node_features, time_per_atom, radii_features], dim=1) 
         node_features = self.atom_latent_emb(node_features)
         # if self.composition_context:
         #     node_features = node_features + context[batch]
@@ -199,15 +240,17 @@ class Ambient_CSPNet_Token(nn.Module):
         source, target = normalized[edge_index[0]], normalized[edge_index[1]] # (E,3,2) R^2xR^2xR^2, each dim in R^2, total 3 dims
         dot = (source * target).sum(-1) # (E,3) 3 dims dot product
         cross = source[..., 0] * target[..., 1] - source[..., 1] * target[..., 0] # (E,3) cross product
-        pos_diff = torch.stack([dot, cross], dim=-1).flatten(start_dim=1) # (E,3,2) rotate invariant dot/cross representation
+        pos_diff = torch.stack([dot, cross], dim=-1).flatten(start_dim=1) # (E,3,2)->(E,6) rotate invariant dot/cross representation
 
         # pos_diff_features = self.pos_emb(torch.atan2(cross, dot)) # (E, num_freqs * f_dim) f_dim is ambient features dim (3*2=6)
+        # pos_diff_features = self.posdiff_emb_mlp(pos_diff_features)
+        pos_diff_features = self.posdiff_emb_mlp(pos_diff)
         edge_graph_index = batch[edge_index[0]]
 
         for layer in self.layers:
             node_features = layer.forward(
-                # pos_diff=pos_diff_features,
-                pos_diff=pos_diff,
+                pos_diff=pos_diff_features,
+                # pos_diff=pos_diff,
                 node_features=node_features,
                 l=l,
                 edge_index=edge_index,
@@ -247,7 +290,7 @@ class Ambient_CSPNet_Token(nn.Module):
             #     graph_features = graph_features + context
             out_l = self.out_l(graph_features)
             out_l = out_l.view(-1, 6)
-            out["l"] = out_l + l
+            out["l"] = out_l + l_raw
 
         if self.pred_h:
             out_h = self.out_h(node_features)

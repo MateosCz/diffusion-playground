@@ -39,20 +39,21 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 total_time = 1.0
 dim = 3
-n_epoch = 3000 + 1 + 2929
-lr = 5e-5
+n_epoch = 8000
+lr = 5e-4
 batch_size = 128 * 4
 num_workers = 1
 eta = 0.75
 evaluate_batch_size = 64
 val_portion = 0.2 
-generation_eval_every_n_epochs = 10
+generation_eval_every_n_epochs = 25
 # Load model/EMA/WeightMLP weights into a fresh training run.
 init_ckpt = None
 # Use only for a full resume from a compatible new-format training checkpoint.
+continue_ckpt = None
 # continue_ckpt = "checkpoints/20261102_172152_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.05_lambda_f_1.0_lr_0.001_batch_size_512/flowmap_csp_2879-0.126604.ckpt"
-continue_ckpt = "checkpoints/20261102_181931_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.005_lambda_f_1.0_lr_0.005_batch_size_512/flowmap_csp_2929-0.126363.ckpt"
-data_folder = "data/mp-20"
+# continue_ckpt = "checkpoints/20261102_181931_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.005_lambda_f_1.0_lr_0.005_batch_size_512/flowmap_csp_2929-0.126363.ckpt"
+data_folder = "data/mp-20/tokenized"
 dataset_name = "mp-20"
 
 l_vfm_kwargs = {
@@ -103,7 +104,7 @@ nn_kwargs = {
 
 lit_kwargs = {
     "use_weight_mlp": True,
-    "lambda_l": 0.005,
+    "lambda_l": 0.05,
     "lambda_f": 1.0,
     "beta_l": 0.1,
     "beta_f": 0.05,
@@ -205,7 +206,105 @@ class LossSpikeCheckpoint(L.Callback):
             directory / "loss_spike_inputs.pt",
         )
 
+class WeightMLPHeatmap(L.Callback):
+    """Log w(s,t) and exp(-w(s,t)) for both loss-weight networks."""
 
+    def __init__(self, n_grid=101):
+        super().__init__()
+        if n_grid < 2:
+            raise ValueError("n_grid must be >= 2")
+        self.n_grid = n_grid
+
+    @torch.no_grad()
+    def on_validation_epoch_end(self, trainer, pl_module):
+        # skip sanity check and only plot and upload by rank 0 when multi-card training
+        if trainer.sanity_checking or not trainer.is_global_zero:
+            return
+        if not pl_module.use_weight_mlp:
+            return
+
+        logger = next(
+            (lg for lg in trainer.loggers if isinstance(lg, WandbLogger)),
+            None,
+        )
+        if logger is None:
+            return
+
+        t_max = float(pl_module.rg_vfm.total_time - pl_module.rg_vfm.time_eps)
+
+        for branch in ("f", "l"):
+            net = getattr(pl_module, f"weight_mlp_{branch}")
+            ref = next(net.parameters())
+
+            times = torch.linspace(
+                0.0, t_max, self.n_grid,
+                device=ref.device, dtype=ref.dtype,
+            )
+
+            # the matrix rows correspond to s, columns correspond to t; only calculate the s <= t region used for training
+            s_grid, t_grid = torch.meshgrid(times, times, indexing="ij")
+            valid = s_grid <= t_grid
+
+            s = s_grid[valid].reshape(-1, 1)
+            t = t_grid[valid].reshape(-1, 1)
+
+            w = net(s, t).reshape(-1).float()
+            mask = valid.cpu().numpy()
+
+            fig, axes = plt.subplots(
+                1, 2, figsize=(12, 5), constrained_layout=True,
+            )
+            try:
+                plots = (
+                    (w, "MLP output: w(s,t)", "coolwarm"),
+                    (
+                        torch.exp(-w),
+                        "Loss coefficient: exp(-w(s,t))",
+                        "viridis",
+                    ),
+                )
+
+                for ax, (values, title, cmap_name) in zip(axes, plots):
+                    values = values.detach().cpu().numpy()
+
+                    matrix = np.full((self.n_grid, self.n_grid), np.nan)
+                    matrix[mask] = values
+
+                    cmap = plt.get_cmap(cmap_name).copy()
+                    cmap.set_bad("#eeeeee")
+
+                    im = ax.imshow(
+                        np.ma.masked_invalid(matrix),
+                        origin="lower",
+                        extent=(0, t_max, 0, t_max),
+                        interpolation="nearest",
+                        aspect="equal",
+                        cmap=cmap,
+                    )
+                    ax.plot([0, t_max], [0, t_max], "k--", lw=0.8)
+                    ax.set_xlabel("t")
+                    ax.set_ylabel("s")
+
+                    # if the network output contains NaN/Inf, display the number in the title
+                    n_bad = int((~np.isfinite(values)).sum())
+                    ax.set_title(
+                        title + (f" | non-finite={n_bad}" if n_bad else "")
+                    )
+                    fig.colorbar(im, ax=ax)
+
+                label = "coordinates" if branch == "f" else "lattice"
+                fig.suptitle(
+                    f"WeightMLP {branch} ({label})"
+                    f" | epoch {trainer.current_epoch + 1}"
+                )
+
+                logger.log_image(
+                    key=f"val/weight_mlp_{branch}",
+                    images=[fig],
+                    step=trainer.global_step,
+                )
+            finally:
+                plt.close(fig)
 class CSPGenerationMetrics(L.Callback):
     """Evaluate sampled crystals with the same structure metrics as KLDM."""
 
@@ -423,7 +522,7 @@ def main():
     if init_ckpt is not None:
         load_initial_weights(lit_model, init_ckpt)
 
-    experiment_name = f"ACSPVNet_FlowMap_{dataset_name}_learnable_edm2_linear_weight_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_lr_{lr}_batch_size_{batch_size}_continue_thirdbest_seperateWeightMlp"
+    experiment_name = f"ACSPNet_{dataset_name}_learnable_weight_time_diff_balanced_dim_linear_lmlp_no_sin_posdiff_lambda_l_{lit_kwargs['lambda_l']}_lambda_f_{lit_kwargs['lambda_f']}_lr_{lr}_batch_size_{batch_size}_subatomic_tokenizer_pca_16"
     if lit_kwargs["non_linear_weight_mlp"]:
         experiment_name += "_non_linear_weight_mlp"
     wandb_logger = WandbLogger(
@@ -488,6 +587,7 @@ def main():
             CSPGenerationMetrics(transform, **sample_kwargs),
             LossSpikeCheckpoint(),
             SaveTrainingConfig(config, checkpoint_dir),
+            WeightMLPHeatmap(n_grid=100),
         ],
     )
 
