@@ -82,8 +82,58 @@ class LitCSPFlowMap(L.LightningModule):
 
         self.save_hyperparameters(ignore=["pi", "flow_map", "rg_vfm", "l_vfm"])
 
+    def on_save_checkpoint(self, checkpoint):
+        if hasattr(self.pi, "get_type_encoding_state"):
+            state = self.pi.get_type_encoding_state()
+            if hasattr(self.pi, "atom_type_table") and state is None:
+                raise RuntimeError("Cannot save a model without its fitted atom encoding.")
+            if state is not None:
+                if self.ema_pi is not None:
+                    ema_state = self.ema_pi.module.get_type_encoding_state()
+                    if ema_state is None or ema_state["state_sha256"] != state["state_sha256"]:
+                        raise ValueError("Predictor and EMA must use the same fitted atom encoding.")
+                checkpoint["type_encoding_state"] = state
+
+    def _restore_type_encoding(self, checkpoint):
+        if not hasattr(self.pi, "atom_type_table"):
+            return
+        embedded = checkpoint.get("type_encoding_state")
+        supplied = (
+            self.pi.get_type_encoding_state()
+            if self.pi._type_encoding_source == "supplied" else None
+        )
+        if embedded is not None and supplied is not None:
+            if embedded.get("state_sha256") != supplied["state_sha256"]:
+                raise ValueError("Explicit atom encoding conflicts with the checkpoint encoding.")
+        state = embedded if embedded is not None else supplied
+        if state is None:
+            raise RuntimeError(
+                "This legacy checkpoint has no type_encoding_state. Supply the original "
+                "training file with --type-encoding-state, or migrate it with "
+                "python -m src.litTrain.migrateCSPEncoding. "
+                "Do not refit PCA or substitute another machine's encoding."
+            )
+        networks = [("pi.", self.pi)]
+        if self.ema_pi is not None:
+            networks.append(("ema_pi.module.", self.ema_pi.module))
+        for prefix, network in networks:
+            network.set_type_encoding_state(state)
+            network._type_encoding_source = "checkpoint"
+            key = prefix + "atom_type_table"
+            table = network.atom_type_table.detach().cpu()
+            saved_table = checkpoint["state_dict"].get(key)
+            if saved_table is not None:
+                if not torch.equal(saved_table.detach().cpu(), table):
+                    raise ValueError(f"Checkpoint {key} disagrees with its atom encoding state.")
+            elif embedded is not None:
+                raise ValueError(f"Checkpoint is missing its saved {key} buffer.")
+            else:
+                # Old checkpoints acquire only the fixed table; learned weights stay intact.
+                checkpoint["state_dict"][key] = table.clone()
+
     def on_load_checkpoint(self, checkpoint):
         """Migrate a shared two-output loss-weight network to independent f/l nets."""
+        self._restore_type_encoding(checkpoint)
         state_dict = checkpoint["state_dict"]
         prefixes = ("weight_mlp.", "weight_mlp_f.", "weight_mlp_l.")
         if not self.use_weight_mlp:

@@ -51,9 +51,11 @@ generation_eval_every_n_epochs = 25
 init_ckpt = None
 # Use only for a full resume from a compatible new-format training checkpoint.
 continue_ckpt = None
+# For legacy checkpoints only: the encoding file used on the training server.
+type_encoding_state_path = None
 # continue_ckpt = "checkpoints/20261102_172152_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.05_lambda_f_1.0_lr_0.001_batch_size_512/flowmap_csp_2879-0.126604.ckpt"
 # continue_ckpt = "checkpoints/20261102_181931_cspFlowMap/ACSPVNet_FlowMap_mp-20_learnable_edm2_linear_weight_lambda_l_0.005_lambda_f_1.0_lr_0.005_batch_size_512/flowmap_csp_2929-0.126363.ckpt"
-data_folder = "data/mp-20/tokenized"
+data_folder = "data/mp-20"
 dataset_name = "mp-20"
 
 l_vfm_kwargs = {
@@ -121,10 +123,11 @@ train_kwargs = {
 }
 
 
-def build_transform() -> PyGT.Compose:
+def build_transform(data_folder_override: str | None = None) -> PyGT.Compose:
+    stats_folder = data_folder if data_folder_override is None else data_folder_override
     return PyGT.Compose(
         [
-            T.ContinuousIntervalLengths(in_key="lengths", out_key="lengths", lengths_loc_scale= f"{data_folder}/train_mean_std_stats.json"),
+            T.ContinuousIntervalLengths(in_key="lengths", out_key="lengths", lengths_loc_scale=f"{stats_folder}/train_mean_std_stats.json"),
             T.ContinuousIntervalAngles(in_key="angles", out_key="angles",angles_loc_scale= (0.0, 0.35) ),
             # Keep fractional positions; RGVFM embeds them as cos/sin(2*pi*f).
             T.FullyConnectedGraph(key="edge_index", len_from="pos"),
@@ -136,13 +139,15 @@ def build_transform() -> PyGT.Compose:
     )
 
 
-def build_model() -> Ambient_CSPNet | Ambient_CSPNet_Token:
+def build_model(*, type_encoding_state=None, initialize_type_encoding=True) -> Ambient_CSPNet_Token:
     # return Ambient_CSPNet(**{
     #     key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"
     # })
-    return Ambient_CSPNet_Token(**{
-        key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"
-    })
+    return Ambient_CSPNet_Token(
+        **{key: value for key, value in nn_kwargs.items() if key != "weight_mlp_kwargs"},
+        type_encoding_state=type_encoding_state,
+        initialize_type_encoding=initialize_type_encoding,
+    )
 
 
 def build_flowmap() -> JointFlowMapCSP:
@@ -505,8 +510,15 @@ def main():
         pin_memory=True,
     )
 
+    encoding_state = (
+        torch.load(type_encoding_state_path, map_location="cpu", weights_only=True)
+        if type_encoding_state_path is not None else None
+    )
     lit_model = LitCSPFlowMap(
-        pi=build_model(),
+        pi=build_model(
+            type_encoding_state=encoding_state,
+            initialize_type_encoding=init_ckpt is None and continue_ckpt is None,
+        ),
         flow_map=build_flowmap(),
         eta=eta,
         lr=lr,
@@ -558,6 +570,7 @@ def main():
         "generation_eval_every_n_epochs": generation_eval_every_n_epochs,
         "init_ckpt": init_ckpt,
         "continue_ckpt": continue_ckpt,
+        "type_encoding_state_path": type_encoding_state_path,
         "accelerator": accelerator,
         "nn_kwargs": nn_kwargs,
         "lit_kwargs": lit_kwargs,

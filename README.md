@@ -150,3 +150,47 @@ Graph updates only replace `x`, `pos` and `l`; the predictor computes edge
 features from the current coordinates when needed. To split generated batches
 with `to_data_list()`, provide templates that already have per-graph `l`
 attributes (placeholder values are sufficient).
+
+### CSP atom encodings
+
+`Ambient_CSPNet_Token` encodes atomic numbers from `graph.h` inside the model.
+Cached `graph.avec` is ignored, so raw datasets can be used directly. The CSP
+training and evaluation entry points default to `data/mp-20`.
+
+Fresh training fits the selected subatomic encoding once. Every Lightning
+checkpoint saves its complete `type_encoding_state` and fixed element lookup
+buffers for both the predictor and EMA. Evaluation, weight initialization and
+training resume restore that state without fitting PCA again. Eval prints the
+encoding state hash so runs on different machines can be compared.
+
+Legacy learned-embedding checkpoints are detected automatically by the CSP eval
+entry point. It reconstructs the original `Ambient_CSPNet`, restores its learned
+element embedding and migrates the old shared loss-weight network if necessary.
+These checkpoints need no PCA encoding artifact.
+
+Old subatomic-tokenizer checkpoints need the original encoding artifact used during training.
+For a one-off evaluation, add
+`--type-encoding-state /path/to/original/subatomic_tokenizer_pca_16.pt`.
+For a portable checkpoint, run this on the training server:
+
+```bash
+python -m src.litTrain.migrateCSPEncoding \
+  --ckpt /path/to/old.ckpt \
+  --type-encoding-state data/mp-20/tokenized/subatomic_tokenizer_pca_16.pt \
+  --output /path/to/portable.ckpt
+```
+
+The migration preserves trained weights and optimizer state and writes a new
+file. An optional `--expected-encoding-sha256 HASH` checks the original encoding's
+canonical hash. Then copy the portable checkpoint to another machine and run:
+
+```bash
+python -m src.litTrain.evalLitCSPFlowMap \
+  --ckpt /path/to/portable.ckpt --split test --n-steps 16 --best-n 5
+```
+
+No preencoded dataset or separate PCA file is required for the portable model.
+The raw dataset and lattice normalization statistics are still required. To
+initialize or resume training from a legacy checkpoint, set
+`type_encoding_state_path` in `trainLitCSPFlowMap.py` to its original encoding file;
+new checkpoints restore their embedded encoding automatically.

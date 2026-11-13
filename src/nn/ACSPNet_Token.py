@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch_geometric.utils import scatter
 from typing import Callable
 from src.nn.scoreNNBlock import SinEmbedding, FourierEmbedding
@@ -7,6 +8,8 @@ from torch_geometric.data import Data
 import numpy as np
 from src.nn.ACSPNet import Ambient_CSPLayer
 from typing import Literal
+from src.dataLib.type_encoding import build_type_encoding
+from src.dataLib.type_encoding_state import export_type_encoding, restore_type_encoding
 
 class Ambient_CSPNet_Token(nn.Module):
     """Two-time endpoint GNN for fractional coordinates and lattice parameters.
@@ -40,6 +43,8 @@ class Ambient_CSPNet_Token(nn.Module):
             atom_mlp_output_dim: int = 128,
             lattice_mlp_output_dim: int = 128,
             posdiff_mlp_output_dim: int = 128,
+            type_encoding_state: dict | None = None,
+            initialize_type_encoding: bool = True,
 
             # neighbor_head: bool = False,
             # composition_context: bool = False,
@@ -75,6 +80,22 @@ class Ambient_CSPNet_Token(nn.Module):
             self.atom_type_dim = 100 # use max 100 atomic numbers for the encoding
         elif atom_type_rep == "one-hot":
             self.atom_type_dim = one_hot_dim
+        if self.atom_type_dim is None:
+            raise ValueError(f"Unsupported atom_type_rep: {atom_type_rep!r}")
+
+        self._type_encoding_state = None
+        self._type_encoding_source = "uninitialized"
+        if atom_type_rep.startswith("subatomic_tokenizer_"):
+            self.register_buffer("atom_type_table", torch.zeros(101, self.atom_type_dim))
+            if type_encoding_state is not None:
+                self.set_type_encoding_state(type_encoding_state)
+            elif initialize_type_encoding:
+                self.set_type_encoding_state(export_type_encoding(
+                    build_type_encoding(atom_type_rep, vz=100)
+                ))
+                self._type_encoding_source = "fresh"
+        elif type_encoding_state is not None:
+            raise ValueError(f"{atom_type_rep} does not use a descriptor encoding state.")
         self.dis_emb_dim = dis_emb_dim
         self.radii_emb_dim = radii_emb_dim
         self.atom_mlp_output_dim = atom_mlp_output_dim
@@ -184,6 +205,47 @@ class Ambient_CSPNet_Token(nn.Module):
         #     nn.init.zeros_(self.composition_context_mlp[-1].weight)
         #     nn.init.zeros_(self.composition_context_mlp[-1].bias)
 
+    def set_type_encoding_state(self, state: dict) -> None:
+        """Restore the fitted element table without recomputing descriptors/PCA."""
+        encoding = restore_type_encoding(state)
+        if encoding.name != self.atom_type_rep or encoding.type_dim != self.atom_type_dim:
+            raise ValueError(
+                f"Encoding {encoding.name} ({encoding.type_dim} features) does not match "
+                f"model {self.atom_type_rep} ({self.atom_type_dim} features)."
+            )
+        if not hasattr(self, "atom_type_table"):
+            raise ValueError(f"{self.atom_type_rep} does not use a descriptor encoding state.")
+        self.atom_type_table = encoding.z_to_enc.to(device=self.atom_type_table.device).clone()
+        self._type_encoding_state = export_type_encoding(encoding)
+        self._type_encoding_source = "supplied"
+
+    def get_type_encoding_state(self) -> dict | None:
+        if self._type_encoding_state is None:
+            return None
+        state = export_type_encoding(restore_type_encoding(self._type_encoding_state))
+        if not torch.equal(self.atom_type_table.detach().cpu(), state["encoding_state"]["z_to_enc"]):
+            raise ValueError("Model element lookup table disagrees with its saved encoding state.")
+        return state
+
+    def encode_atom_types(self, h: torch.Tensor) -> torch.Tensor:
+        """Encode atomic numbers online; cached graph.avec is deliberately unused."""
+        if h.dtype != torch.long or h.ndim != 1:
+            raise ValueError("graph.h must be a one-dimensional LongTensor of atomic numbers.")
+        if self.atom_type_rep == "embedding":
+            return self.node_embedding(h)
+        if self.atom_type_rep == "atomic_number":
+            return F.one_hot(h - 1, num_classes=self.atom_type_dim).to(dtype=self.atom_latent_emb.weight.dtype)
+        if self.atom_type_rep == "one-hot":
+            return F.one_hot(h, num_classes=self.atom_type_dim).to(dtype=self.atom_latent_emb.weight.dtype)
+        if self._type_encoding_state is None:
+            raise RuntimeError(
+                "Model has no fitted atom encoding. Restore a checkpoint with "
+                "type_encoding_state or supply the original training encoding."
+            )
+        if h.numel() and (h.min() < 1 or h.max() >= self.atom_type_table.shape[0]):
+            raise ValueError(f"Atomic numbers must be in [1, {self.atom_type_table.shape[0] - 1}].")
+        return self.atom_type_table[h]
+
     def forward(
             self,
             graph: Data,
@@ -192,7 +254,6 @@ class Ambient_CSPNet_Token(nn.Module):
     ) -> dict[str, torch.Tensor]:
         pos = graph.pos
         h = graph.h
-        avec = graph.avec
         l = graph.l
         l_raw = l
         batch = graph.batch
@@ -210,12 +271,7 @@ class Ambient_CSPNet_Token(nn.Module):
         pairs = pos.reshape(-1, self.f_dim // 2, 2)
         radii_squared = pairs.square().sum(-1)
         radii_features = self.radii_emb(radii_squared)
-        if self.atom_type_rep == "embedding":
-            node_features = self.node_embedding(h) # only the atmomic number + learned embeddings need this embedding layer
-        else:
-            node_features = avec # other cases, we directly feed the graphs preprocessed atom type
-            if node_features.shape[-1] != self.atom_type_dim:
-                raise ValueError(f"graph.avec must have {self.atom_type_dim} atom type features")
+        node_features = self.encode_atom_types(h)
 
         # if self.composition_context:
         #     composition = scatter(
